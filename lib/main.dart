@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math'; // Used for generating random UI colors based on ID
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,7 +10,7 @@ import 'bloc/flatpak_bloc.dart';
 import 'data/flatpak_repository.dart';
 import 'models/flatpak_package.dart';
 import 'platform/flatpak_platform.dart';
-import 'pages/category_page.dart'; // Make sure this file exists
+import 'pages/category_page.dart';
 import 'pages/app_detail_page.dart';
 import 'pages/installed_apps_page.dart';
 import 'pages/settings_page.dart';
@@ -24,14 +24,9 @@ class FlatpakApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // KITA HAPUS inisialisasi manual di sini
-    // final repo = FlatpakRepository(); <-- Hapus baris ini
-
-    // GUNAKAN RepositoryProvider
     return RepositoryProvider(
       create: (context) => FlatpakRepository(),
       child: BlocProvider(
-        // Sekarang Bloc mengambil repo dari context yang sudah disediakan di atasnya
         create: (context) =>
             FlatpakBloc(repo: context.read<FlatpakRepository>())
               ..add(const RefreshAll()),
@@ -71,12 +66,11 @@ class FlatpakHomePage extends StatefulWidget {
 class _FlatpakHomePageState extends State<FlatpakHomePage> {
   final _scrollCtl = ScrollController();
   final _searchCtl = TextEditingController();
-  int _selectedIndex = 0; // For the bottom nav bar visual
+  int _selectedIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    // Pagination Logic integrated into the new ScrollController
     _scrollCtl.addListener(() {
       if (!mounted) return;
       final bloc = context.read<FlatpakBloc>();
@@ -94,110 +88,6 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
     super.dispose();
   }
 
-  // --- Your Existing Logic Preserved Below ---
-  void _showInstallProgress(String appId) {
-    final stream = FlatpakPlatform.installEvents();
-    late final StreamSubscription sub;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      isDismissible: false,
-      builder: (ctx) {
-        final lines = ValueNotifier<List<String>>(<String>[]);
-        sub = stream.listen((event) {
-          try {
-            final Map<String, dynamic> m = event is String
-                ? jsonDecode(event)
-                : (event as Map).cast<String, dynamic>();
-            if (m['appId'] != appId) return;
-
-            switch (m['type']) {
-              case 'stdout':
-                final ln = (m['line'] ?? '').toString();
-                if (ln.trim().isNotEmpty) lines.value = [...lines.value, ln];
-                break;
-              case 'stderr':
-                final ln = (m['line'] ?? '').toString();
-                if (ln.trim().isNotEmpty) {
-                  lines.value = [...lines.value, 'ERR: $ln'];
-                }
-                break;
-              case 'done':
-                if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop();
-                break;
-            }
-          } catch (_) {}
-        });
-
-        return WillPopScope(
-          onWillPop: () async => false,
-          child: Padding(
-            padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-              top: 16,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: const [
-                    CircularProgressIndicator(),
-                    SizedBox(width: 12),
-                    Text(
-                      'Installing application...',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 200,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black12,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: ValueListenableBuilder<List<String>>(
-                        valueListenable: lines,
-                        builder: (_, v, __) => SingleChildScrollView(
-                          child: Text(
-                            v.join(),
-                            style: const TextStyle(fontFamily: 'monospace'),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    ).whenComplete(() {
-      sub.cancel();
-      final bloc = context.read<FlatpakBloc>();
-      final s = bloc.state;
-      if (s is FlatpakLoaded) {
-        bloc.add(LoadFirstPage(query: s.query));
-      } else {
-        bloc.add(const LoadFirstPage());
-      }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Installation Complete')));
-    });
-  }
-
-  // --- UI Construction ---
-
-  @override
   @override
   Widget build(BuildContext context) {
     final bloc = context.read<FlatpakBloc>();
@@ -209,12 +99,10 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
           children: const [
             Icon(Icons.apps, color: Colors.black),
             SizedBox(width: 10),
-            // Change Title dynamically based on tab
             Text('AGL App Store'),
           ],
         ),
         actions: [
-          // Only show search bar on Home Tab (Index 0) to keep Categories clean
           if (_selectedIndex == 0)
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 8),
@@ -255,10 +143,6 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
           ),
         ],
       ),
-
-      // --- THIS IS THE KEY CHANGE ---
-      // If selectedIndex is 1, show CategoriesPage.
-      // Otherwise, show the existing BlocConsumer (Home Feed).
       body: _selectedIndex == 1
           ? const CategoriesPage()
           : _selectedIndex == 2
@@ -308,7 +192,6 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                                 scrollDirection: Axis.horizontal,
                                 child: Row(
                                   children: featuredItems.map((pkg) {
-                                    // --- CHANGE 1: WRAP FEATURED CARD ---
                                     return GestureDetector(
                                       onTap: () {
                                         Navigator.push(
@@ -324,7 +207,6 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                                         color: _getColorFromId(pkg.id),
                                       ),
                                     );
-                                    // ------------------------------------
                                   }).toList(),
                                 ),
                               ),
@@ -355,12 +237,16 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                                   : const SizedBox(height: 50);
                             }
                             final pkg = listItems[index];
-                            final installed = state.installed.contains(pkg.id);
+                            final installed = state.installed.contains(
+                              pkg.flatpakId,
+                            );
+                            // Check if this specific app is installing
+                            final isInstalling = state.installingIds.contains(
+                              pkg.id,
+                            );
 
-                            // --- CHANGE 2: WRAP APP LIST ITEM ---
                             return GestureDetector(
-                              behavior: HitTestBehavior
-                                  .opaque, // Ensures clicks work on empty space
+                              behavior: HitTestBehavior.opaque,
                               onTap: () {
                                 Navigator.push(
                                   context,
@@ -377,19 +263,28 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                                 child: AppListItem(
                                   package: pkg,
                                   isInstalled: installed,
+                                  isInstalling: isInstalling, // Pass state
                                   cardColor: _getColorFromId(pkg.id),
                                   onInstall: () {
-                                    if (!installed) {
-                                      _showInstallProgress(pkg.id);
-                                      bloc.add(InstallApp(pkg.id));
+                                    if (!installed && !isInstalling) {
+                                      // No blocking modal. Just dispatch event.
+                                      bloc.add(InstallApp(pkg.flatpakId));
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            "Downloading ${pkg.name}...",
+                                          ),
+                                        ),
+                                      );
                                     }
                                   },
                                   onUninstall: () =>
-                                      bloc.add(UninstallApp(pkg.id)),
+                                      bloc.add(UninstallApp(pkg.flatpakId)),
                                 ),
                               ),
                             );
-                            // ------------------------------------
                           },
                           childCount:
                               listItems.length + (state.hasMore ? 1 : 0),
@@ -401,12 +296,10 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                 return const SizedBox.shrink();
               },
             ),
-
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: (index) {
           setState(() => _selectedIndex = index);
-          // Only refresh if tapping the Home tab while already on Home
           if (index == 0 && _selectedIndex == 0) {
             bloc.add(const RefreshAll());
           }
@@ -433,11 +326,9 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
     );
   }
 
-  // Helper to generate a consistent pastel color from a string ID
   Color _getColorFromId(String id) {
     final int hash = id.codeUnits.fold(0, (prev, element) => prev + element);
     final Random rng = Random(hash);
-    // Darker pastel shades suitable for white text/icons
     return Color.fromARGB(
       255,
       50 + rng.nextInt(100),
@@ -447,9 +338,6 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
   }
 }
 
-// ==========================================
-// COMPONENT 1: Featured Card
-// ==========================================
 class FeaturedCard extends StatelessWidget {
   final FlatpakPackage package;
   final Color color;
@@ -472,7 +360,6 @@ class FeaturedCard extends StatelessWidget {
             ),
             child: Stack(
               children: [
-                // Background Pattern (Placeholder)
                 Positioned.fill(
                   child: Opacity(
                     opacity: 0.2,
@@ -483,7 +370,6 @@ class FeaturedCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                // Actual Icon
                 Center(child: _AppIcon(url: package.icon, size: 60)),
               ],
             ),
@@ -508,12 +394,10 @@ class FeaturedCard extends StatelessWidget {
   }
 }
 
-// ==========================================
-// COMPONENT 2: List Item
-// ==========================================
 class AppListItem extends StatelessWidget {
   final FlatpakPackage package;
   final bool isInstalled;
+  final bool isInstalling; // NEW: Receive installing state
   final Color cardColor;
   final VoidCallback onInstall;
   final VoidCallback onUninstall;
@@ -522,6 +406,7 @@ class AppListItem extends StatelessWidget {
     super.key,
     required this.package,
     required this.isInstalled,
+    required this.isInstalling,
     required this.cardColor,
     required this.onInstall,
     required this.onUninstall,
@@ -531,7 +416,6 @@ class AppListItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        // Left Side: Text Info
         Expanded(
           flex: 4,
           child: Column(
@@ -552,45 +436,56 @@ class AppListItem extends StatelessWidget {
                 style: TextStyle(color: Colors.blueGrey[400], fontSize: 14),
               ),
               const SizedBox(height: 16),
-              isInstalled
-                  ? Row(
-                      children: [
-                        const Text(
-                          "Installed",
-                          style: TextStyle(
-                            color: Colors.green,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        IconButton(
-                          onPressed: onUninstall,
-                          icon: const Icon(Icons.delete, color: Colors.red),
-                          tooltip: "Uninstall",
-                        ),
-                      ],
-                    )
-                  : ElevatedButton(
-                      onPressed: onInstall,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.grey[200],
-                        foregroundColor: Colors.black,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 12,
-                        ),
+              if (isInstalling)
+                // SHOW SPINNER
+                ElevatedButton.icon(
+                  onPressed: null,
+                  icon: const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  label: const Text('Installing...'),
+                )
+              else if (isInstalled)
+                Row(
+                  children: [
+                    const Text(
+                      "Installed",
+                      style: TextStyle(
+                        color: Colors.green,
+                        fontWeight: FontWeight.bold,
                       ),
-                      child: const Text("Install"),
                     ),
+                    const SizedBox(width: 10),
+                    IconButton(
+                      onPressed: onUninstall,
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                      tooltip: "Uninstall",
+                    ),
+                  ],
+                )
+              else
+                ElevatedButton(
+                  onPressed: onInstall,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.grey[200],
+                    foregroundColor: Colors.black,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                  ),
+                  child: const Text("Install"),
+                ),
             ],
           ),
         ),
         const SizedBox(width: 20),
-        // Right Side: Graphic Card
         Expanded(
           flex: 5,
           child: Container(
@@ -616,13 +511,10 @@ class AppListItem extends StatelessWidget {
   }
 }
 
-// Helper widget for loading icons safely
 class _AppIcon extends StatelessWidget {
   final String? url;
   final double size;
-
   const _AppIcon({required this.url, required this.size});
-
   @override
   Widget build(BuildContext context) {
     if (url == null) {

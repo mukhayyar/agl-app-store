@@ -17,7 +17,8 @@ static const char *kMethodUpdate = "updateFlatpak";
 static const char *kEventsChannelName = "com.pens.flatpak/installer_events";
 static FlEventChannel *g_events_channel = nullptr;
 
-static void send_event_json(const gchar *json);
+static void send_event_map(FlValue *map);
+static gboolean extract_progress(const gchar *line, int *step, int *total, int *percent);
 // ---------------- Plugin Types ----------------
 typedef struct _FlathubInstallerPlugin
 {
@@ -41,45 +42,141 @@ typedef struct
 static gboolean io_cb(GIOChannel *source, GIOCondition cond, gpointer user_data)
 {
     const gchar *app_id = (const gchar *)user_data;
-    if (cond & (G_IO_HUP | G_IO_ERR | G_IO_NVAL))
-        return FALSE;
 
-    gchar *line = nullptr;
-    gsize len = 0;
-    GError *err = nullptr;
-    GIOStatus st = g_io_channel_read_line(source, &line, &len, nullptr, &err);
-    if (st == G_IO_STATUS_NORMAL && line)
+    if (cond & G_IO_IN)
     {
-        // kirim sebagai event JSON
-        gchar *json = g_strdup_printf("{\"type\":\"stdout\",\"appId\":\"%s\",\"line\":%s}",
-                                      app_id, g_strescape(line, nullptr));
-        send_event_json(json);
-        g_free(json);
-        g_free(line);
+        gchar *line = nullptr;
+        gsize len = 0;
+        GError *err = nullptr;
+
+        GIOStatus st = g_io_channel_read_line(source, &line, &len, nullptr, &err);
+        if (st == G_IO_STATUS_NORMAL && line)
+        {
+
+            // 🔥 PRINT TO TERMINAL (YOU WILL SEE INSTALL PROCESS)
+            g_print("[flatpak:%s] %s", app_id, line);
+            // Inside io_cb
+            int step = -1;
+            int total = -1;
+            int percent = -1;
+
+            if (extract_progress(line, &step, &total, &percent))
+            {
+                FlValue *map = fl_value_new_map();
+                fl_value_set_string_take(map, "type", fl_value_new_string("progress"));
+                fl_value_set_string_take(map, "appId", fl_value_new_string(app_id));
+
+                // Only send if valid (optional, but clean)
+                if (step > 0 && total > 0)
+                {
+                    fl_value_set_string_take(map, "step", fl_value_new_int(step));
+                    fl_value_set_string_take(map, "total", fl_value_new_int(total));
+                }
+
+                fl_value_set_string_take(map, "percent", fl_value_new_int(percent));
+                send_event_map(map);
+            }
+            // Send to Flutter
+            FlValue *map = fl_value_new_map();
+            fl_value_set_string_take(map, "type", fl_value_new_string("stdout"));
+            fl_value_set_string_take(map, "appId", fl_value_new_string(app_id));
+            fl_value_set_string_take(map, "line", fl_value_new_string(line));
+            send_event_map(map);
+
+            g_free(line);
+        }
+        if (err)
+            g_error_free(err);
     }
-    if (err)
-        g_error_free(err);
-    return TRUE; // keep watching
+
+    if (cond & (G_IO_HUP | G_IO_ERR | G_IO_NVAL))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
+// 2. UPDATED CHILD WATCH CALLBACK (The Standard Way)
 static void child_watch_cb(GPid pid, gint status, gpointer user_data)
 {
     const gchar *app_id = (const gchar *)user_data;
-    gchar *json = g_strdup_printf("{\"type\":\"done\",\"appId\":\"%s\",\"status\":%d}",
-                                  app_id, status);
-    send_event_json(json);
-    g_free(json);
+
+    FlValue *map = fl_value_new_map();
+    fl_value_set_string_take(map, "type", fl_value_new_string("done"));
+    fl_value_set_string_take(map, "appId", fl_value_new_string(app_id));
+    fl_value_set_string_take(map, "status", fl_value_new_int(status));
+
+    send_event_map(map);
+
     g_spawn_close_pid(pid);
     g_free((gpointer)app_id);
 }
 
 // ---------------- Helper: build argv & spawn ----------------
-static void send_event_json(const gchar *json)
+// 1. Updated Function Signature
+static gboolean extract_progress(
+    const gchar *line,
+    int *step,
+    int *total,
+    int *percent)
 {
-    if (!g_events_channel)
+    if (!line) return FALSE;
+
+    // reset defaults
+    *step = -1;
+    *total = -1;
+    *percent = -1;
+
+    // --------- parse percent ---------
+    const gchar *p = strchr(line, '%');
+    if (p)
+    {
+        const gchar *start = p;
+        while (start > line && g_ascii_isdigit(*(start - 1)))
+            start--;
+
+        if (start < p)
+        {
+            char buf[4] = {0};
+            int len = MIN((int)(p - start), 3);
+            strncpy(buf, start, len);
+            *percent = atoi(buf);
+        }
+    }
+
+    // --------- parse step/total (n/m) ---------
+    const gchar *slash = strchr(line, '/');
+    if (slash)
+    {
+        const gchar *l = slash;
+        while (l > line && g_ascii_isdigit(*(l - 1)))
+            l--;
+
+        const gchar *r = slash + 1;
+        while (g_ascii_isdigit(*r))
+            r++;
+
+        if (l < slash && r > slash + 1)
+        {
+            char a[8] = {0}, b[8] = {0};
+            strncpy(a, l, slash - l);
+            strncpy(b, slash + 1, r - (slash + 1));
+
+            *step = atoi(a);
+            *total = atoi(b);
+        }
+    }
+
+    return (*percent >= 0);
+}
+
+
+static void send_event_map(FlValue *map)
+{
+    if (!g_events_channel || !map)
         return;
-    FlValue *v = fl_value_new_string(json);
-    fl_event_channel_send(g_events_channel, v, nullptr, nullptr);
+    fl_event_channel_send(g_events_channel, map, nullptr, nullptr);
 }
 
 static gboolean spawn_and_capture(char const *const *argv_in,
@@ -164,7 +261,7 @@ static void method_call_cb(FlMethodChannel *channel,
             /*working_directory=*/nullptr,
             /*argv=*/argv,
             /*envp=*/nullptr,
-            /*flags=*/(GSpawnFlags)(G_SPAWN_SEARCH_PATH),
+            /*flags=*/(GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD),
             /*child_setup=*/nullptr,
             /*user_data=*/nullptr,
             /*child_pid=*/&pid,
@@ -306,24 +403,10 @@ static void method_call_cb(FlMethodChannel *channel,
     // ---- listInstalled() -> List<String> app-ids ----
     if (g_strcmp0(method, kMethodListInstalled) == 0)
     {
-        const char *argv[] = {"flatpak", "list", "--app", "--columns=application", nullptr};
-        gint status = -1;
-        GError *error = nullptr;
+        // We request 'application' (ID) and 'name' columns
+        const char *argv[] = {"flatpak", "list", "--app", "--columns=application,name", nullptr};
         gchar *out = nullptr;
-        gboolean ok = spawn_and_capture(argv, &out, nullptr, &status, &error);
-
-        if (!ok || status != 0)
-        {
-            const gchar *msg = error ? error->message : "Failed to list installed apps";
-            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(
-                fl_method_error_response_new("LIST_FAILED", msg, nullptr));
-            if (error)
-                g_error_free(error);
-            if (out)
-                g_free(out);
-            fl_method_call_respond(method_call, resp, nullptr);
-            return;
-        }
+        spawn_and_capture(argv, &out, nullptr, nullptr, nullptr);
 
         FlValue *list = fl_value_new_list();
         if (out)
@@ -333,16 +416,28 @@ static void method_call_cb(FlMethodChannel *channel,
             {
                 if (**p)
                 {
-                    fl_value_append_take(list, fl_value_new_string(*p));
+                    // Split by tab (default flatpak output separator)
+                    gchar **cols = g_strsplit(*p, "\t", -1);
+                    if (cols)
+                    {
+                        // Safe extraction
+                        const gchar *id = cols[0];
+                        const gchar *name = (g_strv_length(cols) > 1) ? cols[1] : id;
+
+                        // Create a Map { "id": "...", "name": "..." }
+                        FlValue *map = fl_value_new_map();
+                        fl_value_set_string_take(map, "id", fl_value_new_string(id));
+                        fl_value_set_string_take(map, "name", fl_value_new_string(name));
+
+                        fl_value_append_take(list, map);
+                        g_strfreev(cols);
+                    }
                 }
             }
             g_strfreev(lines);
             g_free(out);
         }
-
-        g_autoptr(FlMethodResponse) resp =
-            FL_METHOD_RESPONSE(fl_method_success_response_new(list));
-        fl_method_call_respond(method_call, resp, nullptr);
+        fl_method_call_respond(method_call, FL_METHOD_RESPONSE(fl_method_success_response_new(list)), nullptr);
         return;
     }
 
@@ -361,33 +456,81 @@ static void method_call_cb(FlMethodChannel *channel,
                 }
             }
         }
+
         if (!app_id || std::strlen(app_id) == 0)
         {
-            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(
-                fl_method_error_response_new("INVALID_APP_ID", "App ID cannot be null", nullptr));
-            fl_method_call_respond(method_call, resp, nullptr);
+            fl_method_call_respond(
+                method_call,
+                FL_METHOD_RESPONSE(
+                    fl_method_error_response_new("INVALID_APP_ID", "App ID cannot be null", nullptr)),
+                nullptr);
             return;
         }
 
-        const char *argv[] = {"flatpak", "uninstall", app_id, "-y", nullptr};
-        gint status = -1;
-        GError *error = nullptr;
-        gboolean ok = spawn_and_capture(argv, nullptr, nullptr, &status, &error);
+        // 🔥 ASYNC uninstall (NO UI FREEZE)
+        gchar *argv[] = {
+            (gchar *)"flatpak",
+            (gchar *)"uninstall",
+            (gchar *)app_id,
+            (gchar *)"-y",
+            nullptr};
 
-        if (!ok || status != 0)
+        GPid pid = 0;
+        gint out_fd = -1, err_fd = -1;
+        GError *error = nullptr;
+
+        gboolean ok = g_spawn_async_with_pipes(
+            nullptr,
+            argv,
+            nullptr,
+            (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD),
+            nullptr,
+            nullptr,
+            &pid,
+            nullptr,
+            &out_fd,
+            &err_fd,
+            &error);
+
+        if (!ok)
         {
             const gchar *msg = error ? error->message : "Failed to uninstall";
-            g_autoptr(FlMethodResponse) resp =
-                FL_METHOD_RESPONSE(fl_method_error_response_new("UNINSTALL_FAILED", msg, nullptr));
+            fl_method_call_respond(
+                method_call,
+                FL_METHOD_RESPONSE(
+                    fl_method_error_response_new("SPAWN_FAILED", msg, nullptr)),
+                nullptr);
             if (error)
                 g_error_free(error);
-            fl_method_call_respond(method_call, resp, nullptr);
             return;
         }
 
-        g_autoptr(FlMethodResponse) resp =
-            FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
-        fl_method_call_respond(method_call, resp, nullptr);
+        // stdout
+        GIOChannel *out_ch = g_io_channel_unix_new(out_fd);
+        g_io_channel_set_encoding(out_ch, nullptr, nullptr);
+        g_io_add_watch(
+            out_ch,
+            (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
+            io_cb,
+            g_strdup(app_id));
+
+        // stderr
+        GIOChannel *err_ch = g_io_channel_unix_new(err_fd);
+        g_io_channel_set_encoding(err_ch, nullptr, nullptr);
+        g_io_add_watch(
+            err_ch,
+            (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
+            io_cb,
+            g_strdup(app_id));
+
+        // process exit
+        g_child_watch_add(pid, child_watch_cb, g_strdup(app_id));
+
+        // 🔥 respond immediately → UI does NOT block
+        fl_method_call_respond(
+            method_call,
+            FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr)),
+            nullptr);
         return;
     }
 

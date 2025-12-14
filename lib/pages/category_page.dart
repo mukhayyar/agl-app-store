@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../data/flatpak_repository.dart';
 import '../models/flatpak_package.dart';
+import 'app_detail_page.dart';
+// import '../widget/category_app_card.dart';
 // You might need to import your AppListItem component if you want to reuse it for the results page
 // import 'home_page.dart';
 
@@ -12,34 +14,6 @@ class CategoriesPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text(
-          'Categories',
-          style: TextStyle(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-            fontSize: 24,
-          ),
-        ),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: false,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16.0),
-            child: CircleAvatar(
-              backgroundColor: Colors.grey[200],
-              child: const Icon(Icons.settings_outlined, color: Colors.black),
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(right: 16.0),
-            child: CircleAvatar(
-              backgroundImage: NetworkImage('https://i.pravatar.cc/150?img=5'),
-            ),
-          ),
-        ],
-      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: LayoutBuilder(
@@ -190,8 +164,7 @@ class CategoriesPage extends StatelessWidget {
 }
 
 // --- RESULTS PAGE (Shows apps when a category is clicked) ---
-
-class CategoryResultsPage extends StatefulWidget {
+class CategoryResultsPage extends StatelessWidget {
   final String uiName;
   final String apiCategory;
 
@@ -202,83 +175,106 @@ class CategoryResultsPage extends StatefulWidget {
   });
 
   @override
-  State<CategoryResultsPage> createState() => _CategoryResultsPageState();
-}
-
-class _CategoryResultsPageState extends State<CategoryResultsPage> {
-  List<FlatpakPackage> _apps = [];
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadData();
-  }
-
-  Future<void> _loadData() async {
-    // Access your repo (assuming you are using Provider/GetIt/Bloc to retrieve it)
-    // For this snippet I'm creating a new instance, but you should use context.read<FlatpakRepository>() if available
-    final repo = FlatpakRepository();
-    final apps = await repo.fetchByCategory(widget.apiCategory);
-
-    if (mounted) {
-      setState(() {
-        _apps = apps;
-        _loading = false;
-      });
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
+    // 1. Get the global repository instance (Fixes "new instance" issue)
+    final repo = context.read<FlatpakRepository>();
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(widget.uiName),
+        title: Text(uiName),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 0,
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _apps.isEmpty
-          ? const Center(child: Text("No apps found in this category"))
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: _apps.length,
-              separatorBuilder: (c, i) => const SizedBox(height: 16),
-              itemBuilder: (context, index) {
-                final app = _apps[index];
-                return Card(
-                  elevation: 0,
-                  color: Colors.grey[50],
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(color: Colors.grey.shade200),
-                  ),
-                  child: ListTile(
-                    leading: app.icon != null
-                        ? Image.network(
-                            app.icon!,
-                            width: 50,
-                            errorBuilder: (_, __, ___) =>
-                                const Icon(Icons.apps),
-                          )
-                        : const Icon(Icons.apps),
-                    title: Text(
-                      app.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text(
-                      app.summary ?? "",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
-                  ),
-                );
-              },
-            ),
+      // 2. Use StreamBuilder instead of Future/await
+      body: StreamBuilder<List<FlatpakPackage>>(
+        stream: repo.fetchByCategory(apiCategory),
+        builder: (context, snapshot) {
+          // State A: Loading (Initial wait)
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          // State B: Error
+          if (snapshot.hasError) {
+            return Center(child: Text("Error: ${snapshot.error}"));
+          }
+
+          // State C: Empty Data
+          final apps = snapshot.data ?? [];
+          if (apps.isEmpty) {
+            // If connection is done and still empty, show "No apps"
+            if (snapshot.connectionState == ConnectionState.done) {
+              return const Center(
+                child: Text("No apps found in this category"),
+              );
+            }
+            // If still waiting for network but cache was empty, keep spinning
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          // State D: Show List (Cached or Fresh)
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: apps.length,
+            separatorBuilder: (c, i) => const SizedBox(height: 16),
+            itemBuilder: (context, index) {
+              final app = apps[index];
+              return _CategoryAppCard(app: app);
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CategoryAppCard extends StatelessWidget {
+  final FlatpakPackage app;
+  const _CategoryAppCard({required this.app});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      // --- UPDATE THIS SECTION ---
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => AppDetailPage(package: app)),
+        );
+      },
+      // ---------------------------
+      child: Card(
+        elevation: 0,
+        color: Colors.grey[50],
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Colors.grey.shade200),
+        ),
+        child: ListTile(
+          leading: app.icon != null
+              ? Image.network(
+                  app.icon!,
+                  width: 50,
+                  height: 50,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const Icon(Icons.apps),
+                )
+              : const Icon(Icons.apps),
+          title: Text(
+            app.name,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(
+            app.summary ?? "",
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: const Icon(Icons.chevron_right),
+        ),
+      ),
     );
   }
 }

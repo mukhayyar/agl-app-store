@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+
+import '../bloc/flatpak_bloc.dart';
 import '../data/flatpak_repository.dart';
 import '../models/flatpak_package.dart';
 import '../platform/flatpak_platform.dart';
@@ -22,110 +24,135 @@ class _InstalledAppsPageState extends State<InstalledAppsPage> {
   }
 
   Future<void> _loadInstalledApps() async {
-    // 1. Get list of ID strings from the Platform Channel
-    final installedIds = await FlatpakPlatform.listInstalled();
-
-    // 2. Fetch details (Name, Icon, Version) for each ID using the Repo
-    //    (Assuming you have access to the repository via context or direct instance)
     final repo = context.read<FlatpakRepository>();
+    final apps = await repo.getInstalledAppsRobust();
 
-    final List<FlatpakPackage> loadedApps = [];
+    if (!mounted) return;
 
-    for (final appId in installedIds) {
-      // Try to find in cache first, or fetch fresh
-      // You might need to add a 'fetchDetails' or 'getCached' method to your repo
-      // For now, we assume fetchDetails works.
-      var pkg = await repo.fetchDetails(appId);
+    setState(() {
+      _installedApps = apps;
+      _isLoading = false;
+    });
 
-      // Fallback if API fails: create a basic package with just the ID
-      pkg ??= FlatpakPackage(
-        id: appId,
-        name: appId, // Use ID as name if detail fetch fails
-        summary: "Installed Application",
-      );
+    // Background metadata enrichment (safe, async)
+    repo.enrichMissingDetails(apps);
+  }
 
-      loadedApps.add(pkg);
-    }
-
-    if (mounted) {
-      setState(() {
-        _installedApps = loadedApps;
-        _isLoading = false;
-      });
-    }
+  /// 🔥 Remove app locally as soon as uninstall finishes
+  void _removeLocally(String appId) {
+    setState(() {
+      _installedApps.removeWhere((a) => a.id == appId || a.flatpakId == appId);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : CustomScrollView(
-              slivers: [
-                // Title Header
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(20, 60, 20, 30),
-                    child: Text(
-                      "Installed Apps",
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black,
+    return BlocListener<FlatpakBloc, FlatpakState>(
+      listener: (context, state) {
+        if (state is FlatpakLoaded) {
+          // Sync local list with bloc-installed set
+          _installedApps.removeWhere(
+            (app) => !state.installed.contains(app.id),
+          );
+        }
+      },
+      child: BlocBuilder<FlatpakBloc, FlatpakState>(
+        builder: (context, state) {
+          final uninstallingIds = state is FlatpakLoaded
+              ? state.uninstallingIds
+              : const <String>{};
+
+          return Scaffold(
+            backgroundColor: Colors.white,
+            body: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : CustomScrollView(
+                    slivers: [
+                      // ============================
+                      // HEADER
+                      // ============================
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(20, 60, 20, 30),
+                          child: Text(
+                            "Installed Apps",
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
 
-                // Empty State
-                if (_installedApps.isEmpty)
-                  const SliverToBoxAdapter(
-                    child: Center(child: Text("No apps installed")),
-                  ),
+                      // ============================
+                      // EMPTY STATE
+                      // ============================
+                      if (_installedApps.isEmpty)
+                        const SliverToBoxAdapter(
+                          child: Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(40),
+                              child: Text("No apps installed"),
+                            ),
+                          ),
+                        ),
 
-                // App List
-                SliverList(
-                  delegate: SliverChildBuilderDelegate((context, index) {
-                    final app = _installedApps[index];
-                    return _InstalledAppCard(
-                      app: app,
-                      onUninstall: () async {
-                        await FlatpakPlatform.uninstall(app.id);
-                        _loadInstalledApps(); // Refresh list after uninstall
-                      },
-                      onLaunch: () async {
-                        // Make sure you added the 'launch' method to FlatpakPlatform!
-                        // If not, see the note below.
-                        try {
-                          await FlatpakPlatform.launch(app.id);
-                        } catch (e) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text("Could not launch: $e")),
+                      // ============================
+                      // APP LIST
+                      // ============================
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate((context, index) {
+                          final app = _installedApps[index];
+                          final isUninstalling = uninstallingIds.contains(
+                            app.id,
                           );
-                        }
-                      },
-                    );
-                  }, childCount: _installedApps.length),
-                ),
 
-                // Bottom padding
-                const SliverToBoxAdapter(child: SizedBox(height: 100)),
-              ],
-            ),
+                          return _InstalledAppCard(
+                            app: app,
+                            isUninstalling: isUninstalling,
+                            onLaunch: () async {
+                              try {
+                                await FlatpakPlatform.launch(app.id);
+                              } catch (e) {
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text("Launch failed: $e")),
+                                );
+                              }
+                            },
+                            onUninstall: () {
+                              context.read<FlatpakBloc>().add(
+                                UninstallApp(app.id),
+                              );
+                            },
+                          );
+                        }, childCount: _installedApps.length),
+                      ),
+
+                      const SliverToBoxAdapter(child: SizedBox(height: 120)),
+                    ],
+                  ),
+          );
+        },
+      ),
     );
   }
 }
 
+/// =======================================================
+/// CARD
+/// =======================================================
 class _InstalledAppCard extends StatelessWidget {
   final FlatpakPackage app;
-  final VoidCallback onUninstall;
+  final bool isUninstalling;
   final VoidCallback onLaunch;
+  final VoidCallback onUninstall;
 
   const _InstalledAppCard({
     required this.app,
-    required this.onUninstall,
+    required this.isUninstalling,
     required this.onLaunch,
+    required this.onUninstall,
   });
 
   @override
@@ -135,14 +162,15 @@ class _InstalledAppCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // LEFT SIDE: Info & Launch Button
+          // ============================
+          // LEFT: INFO + LAUNCH
+          // ============================
           Expanded(
             flex: 4,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(height: 20), // Visual alignment
+                const SizedBox(height: 20),
                 Text(
                   app.name,
                   style: const TextStyle(
@@ -152,8 +180,8 @@ class _InstalledAppCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  "v${app.version ?? '1.0.0'}",
-                  style: TextStyle(fontSize: 14, color: Colors.blue[300]),
+                  "v${app.version ?? 'Latest'}",
+                  style: TextStyle(fontSize: 14, color: Colors.blueGrey[400]),
                 ),
                 const SizedBox(height: 20),
                 SizedBox(
@@ -167,7 +195,6 @@ class _InstalledAppCard extends StatelessWidget {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
                     ),
                     child: const Text("Launch"),
                   ),
@@ -178,18 +205,18 @@ class _InstalledAppCard extends StatelessWidget {
 
           const SizedBox(width: 16),
 
-          // RIGHT SIDE: Card & Uninstall Button
+          // ============================
+          // RIGHT: CARD + UNINSTALL
+          // ============================
           Expanded(
             flex: 5,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // The Teal Card
                 Container(
                   height: 140,
-                  width: double.infinity,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF4DB6AC), // Teal color from image
+                    color: const Color(0xFF4DB6AC),
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
@@ -199,48 +226,32 @@ class _InstalledAppCard extends StatelessWidget {
                       ),
                     ],
                   ),
-                  child: Stack(
-                    children: [
-                      // Decorative Icon Background
-                      Positioned(
-                        right: -10,
-                        bottom: -10,
-                        child: Icon(
-                          Icons.apps,
-                          size: 100,
-                          color: Colors.white.withOpacity(0.2),
-                        ),
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                      // Main Icon
-                      Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.4),
-                              width: 2,
+                      child: app.icon != null
+                          ? Image.network(app.icon!, width: 40, height: 40)
+                          : const Icon(
+                              Icons.apps,
+                              size: 40,
+                              color: Colors.white,
                             ),
-                          ),
-                          child: app.icon != null
-                              ? Image.network(app.icon!, width: 40, height: 40)
-                              : const Icon(
-                                  Icons.touch_app,
-                                  color: Colors.white,
-                                  size: 40,
-                                ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
-                // Uninstall Button (Right Aligned)
+
+                // ============================
+                // UNINSTALL BUTTON (BLOCKED)
+                // ============================
                 SizedBox(
                   height: 36,
                   child: ElevatedButton(
-                    onPressed: onUninstall,
+                    onPressed: isUninstalling ? null : onUninstall,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.grey[200],
                       foregroundColor: Colors.black,
@@ -248,9 +259,23 @@ class _InstalledAppCard extends StatelessWidget {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
                     ),
-                    child: const Text("Uninstall"),
+                    child: isUninstalling
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 8),
+                              Text("Uninstalling..."),
+                            ],
+                          )
+                        : const Text("Uninstall"),
                   ),
                 ),
               ],

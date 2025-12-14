@@ -19,9 +19,17 @@ class FlatpakPlatform {
     return ok == true;
   }
 
-  static Future<List<String>> listInstalled() async {
+  static Future<List<Map<String, String>>> listInstalled() async {
     final list = await _channel.invokeMethod<List<dynamic>>('listInstalled');
-    return (list ?? []).cast<String>();
+
+    // Safely convert to strongly typed Map
+    return (list ?? []).map((e) {
+      final m = Map<String, dynamic>.from(e);
+      return {
+        'id': m['id']?.toString() ?? '',
+        'name': m['name']?.toString() ?? '',
+      };
+    }).toList();
   }
 
   static Future<void> uninstall(String appId) async {
