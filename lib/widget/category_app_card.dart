@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/flatpak_package.dart';
+import '../pages/app_detail_page.dart';
 
 class _CategoryAppCard extends StatelessWidget {
   final FlatpakPackage app;
@@ -14,7 +15,10 @@ class _CategoryAppCard extends StatelessWidget {
     return GestureDetector(
       onTap: () {
         // Optional: Add navigation to detail page if you have imported it
-        // Navigator.push(context, MaterialPageRoute(builder: (_) => AppDetailPage(package: app)));
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => AppDetailPage(package: app)),
+        );
       },
       child: Card(
         elevation: 0,
