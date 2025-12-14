@@ -1,13 +1,17 @@
 import 'package:flutter/services.dart';
 
 class FlatpakPlatform {
-  static const _channel = MethodChannel('com.example.flathub/installer');
-  static const _events  = EventChannel('com.example.flathub/installer_events');
+  static const _channel = MethodChannel('com.pens.flatpak/installer');
+  static const _events = EventChannel('com.pens.flatpak/installer_events');
 
   static Stream<dynamic> installEvents() => _events.receiveBroadcastStream();
 
   static Future<void> install(String appId) async {
     await _channel.invokeMethod('installFlatpak', {'appId': appId});
+  }
+
+  static Future<void> launch(String appId) async {
+    await _channel.invokeMethod('launchFlatpak', {'appId': appId});
   }
 
   static Future<bool> isInstalled(String appId) async {

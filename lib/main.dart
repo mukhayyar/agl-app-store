@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math'; // Used for generating random UI colors based on ID
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,10 @@ import 'bloc/flatpak_bloc.dart';
 import 'data/flatpak_repository.dart';
 import 'models/flatpak_package.dart';
 import 'platform/flatpak_platform.dart';
+import 'pages/category_page.dart'; // Make sure this file exists
+import 'pages/app_detail_page.dart';
+import 'pages/installed_apps_page.dart';
+import 'pages/settings_page.dart';
 
 void main() {
   runApp(const FlatpakApp());
@@ -19,18 +24,38 @@ class FlatpakApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'PENS AGL App Store',
-      theme: ThemeData.light(useMaterial3: true).copyWith(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        cardTheme: CardThemeData(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          elevation: 2,
+    // KITA HAPUS inisialisasi manual di sini
+    // final repo = FlatpakRepository(); <-- Hapus baris ini
+
+    // GUNAKAN RepositoryProvider
+    return RepositoryProvider(
+      create: (context) => FlatpakRepository(),
+      child: BlocProvider(
+        // Sekarang Bloc mengambil repo dari context yang sudah disediakan di atasnya
+        create: (context) =>
+            FlatpakBloc(repo: context.read<FlatpakRepository>())
+              ..add(const RefreshAll()),
+        child: MaterialApp(
+          title: 'AGL App Store',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            scaffoldBackgroundColor: Colors.white,
+            primaryColor: Colors.black,
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Colors.white,
+              elevation: 0,
+              iconTheme: IconThemeData(color: Colors.black),
+              titleTextStyle: TextStyle(
+                color: Colors.black,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            fontFamily: 'sans-serif',
+          ),
+          home: const FlatpakHomePage(),
         ),
-      ),
-      home: BlocProvider(
-        create: (_) => FlatpakBloc(repo: FlatpakRepository())..add(const RefreshAll()),
-        child: const FlatpakHomePage(),
       ),
     );
   }
@@ -38,18 +63,22 @@ class FlatpakApp extends StatelessWidget {
 
 class FlatpakHomePage extends StatefulWidget {
   const FlatpakHomePage({super.key});
+
   @override
   State<FlatpakHomePage> createState() => _FlatpakHomePageState();
 }
 
 class _FlatpakHomePageState extends State<FlatpakHomePage> {
-  final _searchCtl = TextEditingController();
   final _scrollCtl = ScrollController();
+  final _searchCtl = TextEditingController();
+  int _selectedIndex = 0; // For the bottom nav bar visual
 
   @override
   void initState() {
     super.initState();
+    // Pagination Logic integrated into the new ScrollController
     _scrollCtl.addListener(() {
+      if (!mounted) return;
       final bloc = context.read<FlatpakBloc>();
       if (_scrollCtl.position.pixels >=
           _scrollCtl.position.maxScrollExtent - 400) {
@@ -65,14 +94,7 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
     super.dispose();
   }
 
-  void _copyAppId(String appId) {
-    Clipboard.setData(ClipboardData(text: appId));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('ID aplikasi $appId disalin')),
-    );
-  }
-
-  /// Tampilkan progress install dari EventChannel agar UI tidak freeze
+  // --- Your Existing Logic Preserved Below ---
   void _showInstallProgress(String appId) {
     final stream = FlatpakPlatform.installEvents();
     late final StreamSubscription sub;
@@ -85,19 +107,15 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
         final lines = ValueNotifier<List<String>>(<String>[]);
         sub = stream.listen((event) {
           try {
-            // event dari plugin dikirim sebagai JSON string
             final Map<String, dynamic> m = event is String
                 ? jsonDecode(event)
                 : (event as Map).cast<String, dynamic>();
-            if (m['appId'] != appId) return; // abaikan app lain
+            if (m['appId'] != appId) return;
 
             switch (m['type']) {
               case 'stdout':
                 final ln = (m['line'] ?? '').toString();
-                // flathub sering kirim \r; rapikan seperlunya
-                if (ln.trim().isNotEmpty) {
-                  lines.value = [...lines.value, ln];
-                }
+                if (ln.trim().isNotEmpty) lines.value = [...lines.value, ln];
                 break;
               case 'stderr':
                 final ln = (m['line'] ?? '').toString();
@@ -106,17 +124,14 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                 }
                 break;
               case 'done':
-                // tutup sheet dan refresh list agar badge "Terpasang" muncul
                 if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop();
                 break;
             }
-          } catch (_) {
-            // ignore malformed event
-          }
+          } catch (_) {}
         });
 
         return WillPopScope(
-          onWillPop: () async => false, // jangan bisa di-back saat memasang
+          onWillPop: () async => false,
           child: Padding(
             padding: EdgeInsets.only(
               left: 16,
@@ -132,8 +147,10 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                   children: const [
                     CircularProgressIndicator(),
                     SizedBox(width: 12),
-                    Text('Menginstal aplikasi…',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    Text(
+                      'Installing application...',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -158,15 +175,6 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: () {}, // sengaja disable (biar tak bisa ditutup)
-                    icon: const Icon(Icons.downloading),
-                    label: const Text('Sedang berjalan…'),
-                  ),
-                )
               ],
             ),
           ),
@@ -174,7 +182,6 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
       },
     ).whenComplete(() {
       sub.cancel();
-      // setelah selesai, muat ulang halaman pertama dengan query yang sama
       final bloc = context.read<FlatpakBloc>();
       final s = bloc.state;
       if (s is FlatpakLoaded) {
@@ -182,294 +189,452 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
       } else {
         bloc.add(const LoadFirstPage());
       }
-      // snack kecil
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Instalasi selesai')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Installation Complete')));
     });
   }
 
+  // --- UI Construction ---
+
+  @override
   @override
   Widget build(BuildContext context) {
     final bloc = context.read<FlatpakBloc>();
 
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Flathub Store'),
-        backgroundColor: Theme.of(context).colorScheme.primary,
-        foregroundColor: Theme.of(context).colorScheme.onPrimary,
+        title: Row(
+          children: const [
+            Icon(Icons.apps, color: Colors.black),
+            SizedBox(width: 10),
+            // Change Title dynamically based on tab
+            Text('AGL App Store'),
+          ],
+        ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => bloc.add(const RefreshAll()),
-          ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(56),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: TextField(
-              controller: _searchCtl,
-              decoration: InputDecoration(
-                hintText: 'Cari nama atau App ID…',
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                isDense: true,
+          // Only show search bar on Home Tab (Index 0) to keep Categories clean
+          if (_selectedIndex == 0)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: BorderRadius.circular(8),
               ),
-              onSubmitted: (q) =>
-                  bloc.add(LoadFirstPage(query: q.trim().isEmpty ? null : q.trim())),
+              child: IconButton(
+                icon: const Icon(Icons.search, color: Colors.black54),
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text("Search"),
+                      content: TextField(
+                        controller: _searchCtl,
+                        autofocus: true,
+                        decoration: const InputDecoration(
+                          hintText: "App Name...",
+                        ),
+                        onSubmitted: (q) {
+                          bloc.add(
+                            LoadFirstPage(query: q.trim().isEmpty ? null : q),
+                          );
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          const Padding(
+            padding: EdgeInsets.only(right: 16.0),
+            child: CircleAvatar(
+              backgroundImage: NetworkImage('https://i.pravatar.cc/150?img=5'),
             ),
           ),
-        ),
+        ],
       ),
-      body: BlocConsumer<FlatpakBloc, FlatpakState>(
-        listener: (context, state) {
-          if (state is FlatpakError) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(state.message)),
-            );
-          }
-        },
-        builder: (context, state) {
-          if (state is FlatpakLoading) {
-            return const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Memuat aplikasi dari Flathub...'),
-                ],
-              ),
-            );
-          }
-          if (state is FlatpakLoaded) {
-            if (state.items.isEmpty) {
-              return const Center(child: Text('Tidak ada aplikasi yang ditemukan'));
-            }
-            return ListView.builder(
-              controller: _scrollCtl,
-              itemCount: state.items.length + (state.hasMore ? 1 : 0),
-              itemBuilder: (context, index) {
-                if (index >= state.items.length) {
-                  // loader baris terakhir saat hasMore
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(child: CircularProgressIndicator()),
+
+      // --- THIS IS THE KEY CHANGE ---
+      // If selectedIndex is 1, show CategoriesPage.
+      // Otherwise, show the existing BlocConsumer (Home Feed).
+      body: _selectedIndex == 1
+          ? const CategoriesPage()
+          : _selectedIndex == 2
+          ? const InstalledAppsPage()
+          : _selectedIndex == 3
+          ? const SettingsPage()
+          : BlocConsumer<FlatpakBloc, FlatpakState>(
+              listener: (context, state) {
+                if (state is FlatpakError) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(state.message)));
+                }
+              },
+              builder: (context, state) {
+                if (state is FlatpakLoading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (state is FlatpakError) {
+                  return Center(
+                    child: TextButton(
+                      onPressed: () => bloc.add(const RefreshAll()),
+                      child: const Text("Error. Tap to Retry"),
+                    ),
                   );
                 }
-                final pkg = state.items[index];
-                final installed = state.installed.contains(pkg.id);
-                return _AppCard(
-                  package: pkg,
-                  installed: installed,
-                  onCopy: () => _copyAppId(pkg.id),
-                  onInstall: () {
-                    // tampilkan progress stream + trigger install
-                    _showInstallProgress(pkg.id);
-                    bloc.add(InstallApp(pkg.id));
-                  },
-                  onUpdate: () => bloc.add(UpdateApp(pkg.id)),
-                  onUninstall: () => bloc.add(UninstallApp(pkg.id)),
-                );
+
+                if (state is FlatpakLoaded) {
+                  final items = state.items;
+                  if (items.isEmpty) {
+                    return const Center(child: Text("No apps found"));
+                  }
+
+                  final featuredItems = items.take(3).toList();
+                  final listItems = items.skip(3).toList();
+
+                  return CustomScrollView(
+                    controller: _scrollCtl,
+                    slivers: [
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: featuredItems.map((pkg) {
+                                    // --- CHANGE 1: WRAP FEATURED CARD ---
+                                    return GestureDetector(
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                AppDetailPage(package: pkg),
+                                          ),
+                                        );
+                                      },
+                                      child: FeaturedCard(
+                                        package: pkg,
+                                        color: _getColorFromId(pkg.id),
+                                      ),
+                                    );
+                                    // ------------------------------------
+                                  }).toList(),
+                                ),
+                              ),
+                              const SizedBox(height: 30),
+                              const Text(
+                                "All Apps",
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            if (index >= listItems.length) {
+                              return state.hasMore
+                                  ? const Center(
+                                      child: Padding(
+                                        padding: EdgeInsets.all(16.0),
+                                        child: CircularProgressIndicator(),
+                                      ),
+                                    )
+                                  : const SizedBox(height: 50);
+                            }
+                            final pkg = listItems[index];
+                            final installed = state.installed.contains(pkg.id);
+
+                            // --- CHANGE 2: WRAP APP LIST ITEM ---
+                            return GestureDetector(
+                              behavior: HitTestBehavior
+                                  .opaque, // Ensures clicks work on empty space
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => AppDetailPage(package: pkg),
+                                  ),
+                                );
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 10,
+                                ),
+                                child: AppListItem(
+                                  package: pkg,
+                                  isInstalled: installed,
+                                  cardColor: _getColorFromId(pkg.id),
+                                  onInstall: () {
+                                    if (!installed) {
+                                      _showInstallProgress(pkg.id);
+                                      bloc.add(InstallApp(pkg.id));
+                                    }
+                                  },
+                                  onUninstall: () =>
+                                      bloc.add(UninstallApp(pkg.id)),
+                                ),
+                              ),
+                            );
+                            // ------------------------------------
+                          },
+                          childCount:
+                              listItems.length + (state.hasMore ? 1 : 0),
+                        ),
+                      ),
+                    ],
+                  );
+                }
+                return const SizedBox.shrink();
               },
-            );
+            ),
+
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) {
+          setState(() => _selectedIndex = index);
+          // Only refresh if tapping the Home tab while already on Home
+          if (index == 0 && _selectedIndex == 0) {
+            bloc.add(const RefreshAll());
           }
-          if (state is FlatpakError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline, color: Colors.red, size: 48),
-                  const SizedBox(height: 16),
-                  Text(
-                    state.message,
-                    style: const TextStyle(color: Colors.red),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: () => bloc.add(const RefreshAll()),
-                    child: const Text('Coba Lagi'),
-                  ),
-                ],
-              ),
-            );
-          }
-          return const SizedBox.shrink();
         },
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: Colors.black,
+        unselectedItemColor: Colors.grey,
+        showUnselectedLabels: true,
+        backgroundColor: Colors.white,
+        elevation: 10,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+          BottomNavigationBarItem(icon: Icon(Icons.list), label: "Categories"),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.branding_watermark),
+            label: "Installed",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings_outlined),
+            label: "Settings",
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper to generate a consistent pastel color from a string ID
+  Color _getColorFromId(String id) {
+    final int hash = id.codeUnits.fold(0, (prev, element) => prev + element);
+    final Random rng = Random(hash);
+    // Darker pastel shades suitable for white text/icons
+    return Color.fromARGB(
+      255,
+      50 + rng.nextInt(100),
+      50 + rng.nextInt(100),
+      50 + rng.nextInt(100),
+    );
+  }
+}
+
+// ==========================================
+// COMPONENT 1: Featured Card
+// ==========================================
+class FeaturedCard extends StatelessWidget {
+  final FlatpakPackage package;
+  final Color color;
+
+  const FeaturedCard({super.key, required this.package, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 280,
+      margin: const EdgeInsets.only(right: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: 160,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Stack(
+              children: [
+                // Background Pattern (Placeholder)
+                Positioned.fill(
+                  child: Opacity(
+                    opacity: 0.2,
+                    child: Image.network(
+                      "https://images.unsplash.com/photo-1552086971-da0cb107297e?auto=format&fit=crop&q=80&w=300",
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const SizedBox(),
+                    ),
+                  ),
+                ),
+                // Actual Icon
+                Center(child: _AppIcon(url: package.icon, size: 60)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            package.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            package.summary ?? "No description available",
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: Colors.blueGrey[400], fontSize: 14),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _AppCard extends StatelessWidget {
+// ==========================================
+// COMPONENT 2: List Item
+// ==========================================
+class AppListItem extends StatelessWidget {
   final FlatpakPackage package;
-  final bool installed;
-  final VoidCallback onCopy;
+  final bool isInstalled;
+  final Color cardColor;
   final VoidCallback onInstall;
-  final VoidCallback onUpdate;
   final VoidCallback onUninstall;
 
-  const _AppCard({
+  const AppListItem({
+    super.key,
     required this.package,
-    required this.installed,
-    required this.onCopy,
+    required this.isInstalled,
+    required this.cardColor,
     required this.onInstall,
-    required this.onUpdate,
     required this.onUninstall,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        children: [
-          ListTile(
-            contentPadding: const EdgeInsets.all(12),
-            leading: package.icon != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.network(
-                      package.icon!,
-                      width: 56,
-                      height: 56,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _iconFallback(),
-                    ),
-                  )
-                : _iconFallback(),
-            title: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    package.name,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+    return Row(
+      children: [
+        // Left Side: Text Info
+        Expanded(
+          flex: 4,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                package.name,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
                 ),
-                if (installed)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green[600],
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: const Text('Terpasang',
-                        style: TextStyle(color: Colors.white, fontSize: 11)),
-                  ),
-              ],
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if ((package.summary ?? '').isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      package.summary!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                if ((package.description ?? '').isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      package.description!,
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                    ),
-                  ),
-                if ((package.developerName ?? '').isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      'Oleh: ${package.developerName}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                  ),
-                if ((package.version ?? '').isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      'Versi: ${package.version}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                  ),
-                if ((package.downloadSize ?? '').isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      'Ukuran: ${package.downloadSize} MB',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.copy, size: 18),
-                    label: const Text('Salin ID'),
-                    onPressed: onCopy,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (!installed) ...[
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.download, size: 18),
-                      label: const Text('Instal'),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                package.summary ?? "",
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: Colors.blueGrey[400], fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+              isInstalled
+                  ? Row(
+                      children: [
+                        const Text(
+                          "Installed",
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        IconButton(
+                          onPressed: onUninstall,
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          tooltip: "Uninstall",
+                        ),
+                      ],
+                    )
+                  : ElevatedButton(
                       onPressed: onInstall,
-                    ),
-                  ),
-                ] else ...[
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.system_update_alt, size: 18),
-                      label: const Text('Update'),
-                      onPressed: onUpdate,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      icon: const Icon(Icons.delete_forever, size: 18),
-                      label: const Text('Hapus'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
+                        backgroundColor: Colors.grey[200],
+                        foregroundColor: Colors.black,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
+                        ),
                       ),
-                      onPressed: onUninstall,
+                      child: const Text("Install"),
                     ),
-                  ),
-                ],
-              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 20),
+        // Right Side: Graphic Card
+        Expanded(
+          flex: 5,
+          child: Container(
+            height: 150,
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: _AppIcon(url: package.icon, size: 50),
+              ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
+}
 
-  Widget _iconFallback() => Container(
-        width: 56,
-        height: 56,
-        decoration: BoxDecoration(
-          color: Colors.grey[300],
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: const Icon(Icons.apps_rounded, color: Colors.grey),
-      );
+// Helper widget for loading icons safely
+class _AppIcon extends StatelessWidget {
+  final String? url;
+  final double size;
+
+  const _AppIcon({required this.url, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    if (url == null) {
+      return Icon(Icons.apps, size: size, color: Colors.white);
+    }
+    return Image.network(
+      url!,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) =>
+          Icon(Icons.broken_image, size: size, color: Colors.white),
+    );
+  }
 }

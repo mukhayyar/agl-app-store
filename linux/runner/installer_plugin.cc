@@ -7,13 +7,14 @@
 #include <cstring>
 
 // ---------------- Channel & Method Names ----------------
-static const char *kChannelName = "com.example.flathub/installer";
+static const char *kChannelName = "com.pens.flatpak/installer";
 static const char *kMethodInstall = "installFlatpak";
+static const char *kMethodLaunch = "launchFlatpak";
 static const char *kMethodIsInstalled = "isInstalled";
 static const char *kMethodListInstalled = "listInstalled";
 static const char *kMethodUninstall = "uninstallFlatpak";
 static const char *kMethodUpdate = "updateFlatpak";
-static const char *kEventsChannelName = "com.example.flathub/installer_events";
+static const char *kEventsChannelName = "com.pens.flatpak/installer_events";
 static FlEventChannel *g_events_channel = nullptr;
 
 static void send_event_json(const gchar *json);
@@ -206,6 +207,58 @@ static void method_call_cb(FlMethodChannel *channel,
         g_autoptr(FlMethodResponse) resp =
             FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
         fl_method_call_respond(method_call, resp, nullptr);
+        return;
+    }
+
+    // ---- launchFlatpak(appId) [NEW] ----
+    if (g_strcmp0(method, kMethodLaunch) == 0)
+    {
+        // 1. Declare and Extract app_id locally to ensure it exists in this scope
+        const gchar *app_id = nullptr;
+        if (FlValue *args = fl_method_call_get_args(method_call))
+        {
+            if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
+            {
+                FlValue *v = fl_value_lookup_string(args, "appId");
+                if (v && fl_value_get_type(v) == FL_VALUE_TYPE_STRING)
+                {
+                    app_id = fl_value_get_string(v);
+                }
+            }
+        }
+
+        // 2. Validate it
+        if (!app_id || std::strlen(app_id) == 0)
+        {
+            fl_method_call_respond(method_call, FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ID", "No ID provided", nullptr)), nullptr);
+            return;
+        }
+
+        // 3. Run flatpak command
+        gchar *argv[] = {(gchar *)"flatpak", (gchar *)"run", (gchar *)app_id, nullptr};
+        GError *error = nullptr;
+
+        gboolean ok = g_spawn_async(
+            nullptr,
+            argv,
+            nullptr,
+            G_SPAWN_SEARCH_PATH,
+            nullptr,
+            nullptr,
+            nullptr,
+            &error);
+
+        if (!ok)
+        {
+            const gchar *msg = error ? error->message : "Failed to launch";
+            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(fl_method_error_response_new("LAUNCH_FAILED", msg, nullptr));
+            if (error)
+                g_error_free(error);
+            fl_method_call_respond(method_call, resp, nullptr);
+            return;
+        }
+
+        fl_method_call_respond(method_call, FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr)), nullptr);
         return;
     }
 

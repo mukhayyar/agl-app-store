@@ -1,8 +1,9 @@
 import 'package:flutter/services.dart';
 
 class FlatpakInstaller {
-  static const MethodChannel _channel =
-      MethodChannel('com.example.flathub/installer');
+  static const MethodChannel _channel = MethodChannel(
+    'com.pens.flatpak/installer',
+  );
 
   static Future<void> installApp(String appId) async {
     try {

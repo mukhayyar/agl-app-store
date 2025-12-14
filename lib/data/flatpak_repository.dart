@@ -31,9 +31,7 @@ class FlatpakRepository {
       await _cache.upsertAll(apps);
     } else if (decoded.first is String) {
       final ids = decoded.cast<String>();
-      final apps = ids
-          .map((id) => FlatpakPackage(id: id, name: id))
-          .toList();
+      final apps = ids.map((id) => FlatpakPackage(id: id, name: id)).toList();
       await _cache.upsertAll(apps);
     } else {
       throw Exception('Format tidak didukung dari Flathub.');
@@ -55,11 +53,16 @@ class FlatpakRepository {
   }
 
   /// Enrich untuk item yang belum punya summary/description (concurrency dibatasi).
-  Future<void> enrichMissingDetails(List<FlatpakPackage> items,
-      {int maxConcurrent = 8}) async {
+  Future<void> enrichMissingDetails(
+    List<FlatpakPackage> items, {
+    int maxConcurrent = 8,
+  }) async {
     final toFetch = items
-        .where((p) => (p.summary == null || p.summary!.isEmpty) ||
-                      (p.description == null || p.description!.isEmpty))
+        .where(
+          (p) =>
+              (p.summary == null || p.summary!.isEmpty) ||
+              (p.description == null || p.description!.isEmpty),
+        )
         .map((p) => p.id)
         .toList();
     if (toFetch.isEmpty) return;
@@ -91,9 +94,45 @@ class FlatpakRepository {
   }
 
   Future<bool> isInstalled(String appId) => FlatpakPlatform.isInstalled(appId);
-  Future<void> install(String appId)     => FlatpakPlatform.install(appId);
-  Future<void> uninstall(String appId)   => FlatpakPlatform.uninstall(appId);
-  Future<void> update(String appId)      => FlatpakPlatform.update(appId);
+  Future<void> install(String appId) => FlatpakPlatform.install(appId);
+  Future<void> uninstall(String appId) => FlatpakPlatform.uninstall(appId);
+  Future<void> update(String appId) => FlatpakPlatform.update(appId);
+
+  /// Fetches apps for a specific category from Flathub API v2
+  Future<List<FlatpakPackage>> fetchByCategory(String categoryName) async {
+    // API Spec: /collection/category/{category}
+    final uri = Uri.parse('$_baseUrl/collection/category/$categoryName');
+
+    try {
+      final resp = await http.get(uri);
+      if (resp.statusCode != 200) {
+        print("Error fetching category $categoryName: ${resp.statusCode}");
+        return [];
+      }
+
+      final decoded = json.decode(resp.body);
+
+      // The Meilisearch response usually puts the items in a "hits" array
+      List<dynamic> hits = [];
+      if (decoded is Map<String, dynamic> && decoded.containsKey('hits')) {
+        hits = decoded['hits'];
+      } else if (decoded is List) {
+        hits = decoded;
+      }
+
+      final apps = hits.map((m) => FlatpakPackage.fromAppstream(m)).toList();
+
+      // Optionally cache these results too so they appear in global search
+      if (apps.isNotEmpty) {
+        await _cache.upsertAll(apps);
+      }
+
+      return apps;
+    } catch (e) {
+      print("Exception fetching category: $e");
+      return [];
+    }
+  }
 }
 
 /// Simple semaphore untuk membatasi concurrency
