@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:provider/provider.dart';
 
 import 'bloc/flatpak_bloc.dart';
 import 'data/flatpak_repository.dart';
@@ -14,6 +15,10 @@ import 'pages/category_page.dart';
 import 'pages/app_detail_page.dart';
 import 'pages/installed_apps_page.dart';
 import 'pages/settings_page.dart';
+import 'pages/monitor_page.dart';
+import 'services/system_monitor.dart';
+import 'services/gps_service.dart';
+import 'services/api_benchmark.dart';
 
 void main() {
   runApp(const FlatpakApp());
@@ -24,32 +29,39 @@ class FlatpakApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RepositoryProvider(
-      create: (context) => FlatpakRepository(),
-      child: BlocProvider(
-        create: (context) =>
-            FlatpakBloc(repo: context.read<FlatpakRepository>())
-              ..add(const RefreshAll()),
-        child: MaterialApp(
-          title: 'AGL App Store',
-          debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            scaffoldBackgroundColor: Colors.white,
-            primaryColor: Colors.black,
-            colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
-            appBarTheme: const AppBarTheme(
-              backgroundColor: Colors.white,
-              elevation: 0,
-              iconTheme: IconThemeData(color: Colors.black),
-              titleTextStyle: TextStyle(
-                color: Colors.black,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => SystemMonitor()..start()),
+        ChangeNotifierProvider(create: (_) => GpsService()..start()),
+        Provider(create: (_) => ApiBenchmark()),
+      ],
+      child: RepositoryProvider(
+        create: (context) => FlatpakRepository(),
+        child: BlocProvider(
+          create: (context) =>
+              FlatpakBloc(repo: context.read<FlatpakRepository>())
+                ..add(const RefreshAll()),
+          child: MaterialApp(
+            title: 'AGL App Store',
+            debugShowCheckedModeBanner: false,
+            theme: ThemeData(
+              scaffoldBackgroundColor: Colors.white,
+              primaryColor: Colors.black,
+              colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
+              appBarTheme: const AppBarTheme(
+                backgroundColor: Colors.white,
+                elevation: 0,
+                iconTheme: IconThemeData(color: Colors.black),
+                titleTextStyle: TextStyle(
+                  color: Colors.black,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
+              fontFamily: 'sans-serif',
             ),
-            fontFamily: 'sans-serif',
+            home: const FlatpakHomePage(),
           ),
-          home: const FlatpakHomePage(),
         ),
       ),
     );
@@ -149,6 +161,8 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
           ? const InstalledAppsPage()
           : _selectedIndex == 3
           ? const SettingsPage()
+          : _selectedIndex == 4
+          ? const MonitorPage()
           : BlocConsumer<FlatpakBloc, FlatpakState>(
               listener: (context, state) {
                 if (state is FlatpakError) {
@@ -320,6 +334,10 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_outlined),
             label: "Settings",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.monitor_heart),
+            label: "Monitor",
           ),
         ],
       ),
