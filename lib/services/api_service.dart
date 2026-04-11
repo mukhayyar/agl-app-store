@@ -3,6 +3,26 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+enum ExpiryLevel { critical, warning, notice }
+
+class ExpiryInfo {
+  final String label;
+  final ExpiryLevel level;
+  const ExpiryInfo(this.label, this.level);
+}
+
+ExpiryInfo? getExpiryInfo(DateTime? expiresAt) {
+  if (expiresAt == null) return null;
+  final now = DateTime.now();
+  final diff = expiresAt.difference(now);
+  final days = diff.inDays;
+  if (diff.isNegative) return const ExpiryInfo('Expired', ExpiryLevel.critical);
+  if (days < 1) return const ExpiryInfo('Expires today', ExpiryLevel.critical);
+  if (days <= 7) return ExpiryInfo('$days days left', ExpiryLevel.warning);
+  if (days <= 30) return ExpiryInfo('$days days left', ExpiryLevel.notice);
+  return null;
+}
+
 class AppItem {
   final String id;
   final String name;
@@ -10,6 +30,10 @@ class AppItem {
   final String version;
   final String? category;
   final String? iconUrl;
+  final String? developer;
+  final String? license;
+  final bool isVerified;
+  final DateTime? expiresAt;
 
   const AppItem({
     required this.id,
@@ -18,16 +42,35 @@ class AppItem {
     required this.version,
     this.category,
     this.iconUrl,
+    this.developer,
+    this.license,
+    this.isVerified = false,
+    this.expiresAt,
   });
 
   factory AppItem.fromJson(Map<String, dynamic> json) {
+    final rawDesc = (json['description'] ?? '').toString();
+    final summary = (json['summary'] ?? '').toString();
+    final description = rawDesc.isNotEmpty ? rawDesc : summary;
+
+    DateTime? expiresAt;
+    if (json['expires_at'] != null) {
+      try {
+        expiresAt = DateTime.parse(json['expires_at'].toString());
+      } catch (_) {}
+    }
+
     return AppItem(
       id: (json['id'] ?? json['_id'] ?? '').toString(),
       name: (json['name'] ?? 'Unknown').toString(),
-      description: (json['description'] ?? '').toString(),
+      description: description,
       version: (json['version'] ?? '0.0.1').toString(),
-      category: json['category']?.toString(),
-      iconUrl: json['icon_url']?.toString() ?? json['iconUrl']?.toString(),
+      category: ((json['categories'] as List?)?.firstOrNull?.toString()) ?? json['category']?.toString(),
+      iconUrl: json['icon']?.toString() ?? json['icon_url']?.toString() ?? json['iconUrl']?.toString(),
+      developer: json['developer_name']?.toString(),
+      license: json['project_license']?.toString(),
+      isVerified: json['is_verified'] == true,
+      expiresAt: expiresAt,
     );
   }
 }

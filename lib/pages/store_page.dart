@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
 import '../services/api_service.dart';
 
 class StorePage extends StatefulWidget {
@@ -148,6 +147,8 @@ class _AppCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final expiryInfo = getExpiryInfo(app.expiresAt);
+
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
@@ -183,15 +184,40 @@ class _AppCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          app.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFFDDDDEE),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                app.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Color(0xFFDDDDEE),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (app.isVerified) ...[
+                              const SizedBox(width: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF003A3A),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: const Color(0xFF00D4FF), width: 0.5),
+                                ),
+                                child: const Text(
+                                  '\u2713 Verified',
+                                  style: TextStyle(
+                                    color: Color(0xFF00D4FF),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         Text(
                           'v${app.version}',
@@ -218,25 +244,32 @@ class _AppCard extends StatelessWidget {
                   ),
                 ),
               ),
-              if (app.category != null) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1A2A3A),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: const Color(0xFF224455)),
-                  ),
-                  child: Text(
-                    app.category!,
-                    style: const TextStyle(
-                      color: Color(0xFF00D4FF),
-                      fontSize: 10,
-                      letterSpacing: 0.5,
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  if (app.category != null) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A2A3A),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFF224455)),
+                      ),
+                      child: Text(
+                        app.category!,
+                        style: const TextStyle(
+                          color: Color(0xFF00D4FF),
+                          fontSize: 10,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-              ],
+                    const SizedBox(width: 6),
+                  ],
+                  if (expiryInfo != null)
+                    _ExpiryChip(info: expiryInfo),
+                ],
+              ),
             ],
           ),
         ),
@@ -245,6 +278,7 @@ class _AppCard extends StatelessWidget {
   }
 
   void _showDetail(BuildContext context) {
+    final expiryInfo = getExpiryInfo(app.expiresAt);
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -253,23 +287,103 @@ class _AppCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           side: const BorderSide(color: Color(0xFF222233)),
         ),
-        title: Text(
-          app.name,
-          style: const TextStyle(color: Color(0xFF00D4FF), fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        title: Row(
           children: [
-            _row('Version', app.version),
-            if (app.category != null) _row('Category', app.category!),
-            if (app.description.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              const Text('Description:', style: TextStyle(color: Color(0xFF556677), fontSize: 12)),
-              const SizedBox(height: 4),
-              Text(app.description, style: const TextStyle(color: Color(0xFFAAAAAB), fontSize: 13)),
+            Expanded(
+              child: Text(
+                app.name,
+                style: const TextStyle(color: Color(0xFF00D4FF), fontWeight: FontWeight.bold),
+              ),
+            ),
+            if (app.isVerified) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF003A3A),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFF00D4FF), width: 0.5),
+                ),
+                child: const Text(
+                  '\u2713 Verified by AGL Store',
+                  style: TextStyle(
+                    color: Color(0xFF00D4FF),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             ],
           ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _row('Version', app.version),
+              if (app.developer != null) _row('Developer', app.developer!),
+              if (app.license != null) _row('License', app.license!),
+              if (app.category != null) _row('Category', app.category!),
+              if (app.expiresAt != null) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Certificate expires: ',
+                          style: TextStyle(color: Color(0xFF556677), fontSize: 12)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _formatDate(app.expiresAt!),
+                              style: TextStyle(
+                                color: expiryInfo != null
+                                    ? _expiryTextColor(expiryInfo.level)
+                                    : const Color(0xFFCCCCDD),
+                                fontSize: 12,
+                              ),
+                            ),
+                            if (expiryInfo != null) ...[
+                              const SizedBox(height: 2),
+                              _ExpiryChip(info: expiryInfo),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (app.description.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                const Text('Description:', style: TextStyle(color: Color(0xFF556677), fontSize: 12)),
+                const SizedBox(height: 4),
+                Text(app.description, style: const TextStyle(color: Color(0xFFAAAAAB), fontSize: 13)),
+              ],
+              const SizedBox(height: 12),
+              const Text('Install command:', style: TextStyle(color: Color(0xFF556677), fontSize: 12)),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A0A0F),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFF222233)),
+                ),
+                child: SelectableText(
+                  'flatpak install repo.agl-store.cyou ${app.id}',
+                  style: const TextStyle(
+                    color: Color(0xFF00FF88),
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -286,14 +400,72 @@ class _AppCard extends StatelessWidget {
     );
   }
 
+  String _formatDate(DateTime dt) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '\${months[dt.month - 1]} \${dt.day}, \${dt.year}';
+  }
+
+    Color _expiryTextColor(ExpiryLevel level) {
+    switch (level) {
+      case ExpiryLevel.critical:
+        return const Color(0xFFFF4444);
+      case ExpiryLevel.warning:
+        return const Color(0xFFFF8800);
+      case ExpiryLevel.notice:
+        return const Color(0xFFCCCC00);
+    }
+  }
+
   Widget _row(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
           Text('$label: ', style: const TextStyle(color: Color(0xFF556677), fontSize: 12)),
-          Text(value, style: const TextStyle(color: Color(0xFFCCCCDD), fontSize: 12)),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: Color(0xFFCCCCDD), fontSize: 12)),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _ExpiryChip extends StatelessWidget {
+  final ExpiryInfo info;
+  const _ExpiryChip({required this.info});
+
+  @override
+  Widget build(BuildContext context) {
+    Color bg;
+    Color fg;
+    switch (info.level) {
+      case ExpiryLevel.critical:
+        bg = const Color(0xFF3A0000);
+        fg = const Color(0xFFFF4444);
+        break;
+      case ExpiryLevel.warning:
+        bg = const Color(0xFF3A1A00);
+        fg = const Color(0xFFFF8800);
+        break;
+      case ExpiryLevel.notice:
+        bg = const Color(0xFF2A2A00);
+        fg = const Color(0xFFCCCC00);
+        break;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: fg.withOpacity(0.5), width: 0.5),
+      ),
+      child: Text(
+        info.label,
+        style: TextStyle(color: fg, fontSize: 9, fontWeight: FontWeight.w600),
       ),
     );
   }

@@ -19,7 +19,7 @@ void main() async {
         ChangeNotifierProvider(create: (_) => GpsService()),
         ChangeNotifierProvider(
           create: (_) => ApiService(
-            baseUrl: prefs.getString('api_base_url') ?? 'http://localhost:8002',
+            baseUrl: prefs.getString('api_base_url') ?? 'https://api.agl-store.cyou',
           ),
         ),
         ChangeNotifierProvider(create: (_) => SettingsModel(prefs)),
@@ -34,7 +34,7 @@ class SettingsModel extends ChangeNotifier {
   late String _apiBaseUrl;
 
   SettingsModel(this._prefs) {
-    _apiBaseUrl = _prefs.getString('api_base_url') ?? 'http://localhost:8002';
+    _apiBaseUrl = _prefs.getString('api_base_url') ?? 'https://api.agl-store.cyou';
   }
 
   String get apiBaseUrl => _apiBaseUrl;
