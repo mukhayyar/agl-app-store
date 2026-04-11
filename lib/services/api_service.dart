@@ -48,6 +48,25 @@ class AppItem {
     this.expiresAt,
   });
 
+  factory AppItem.fromFlathubJson(Map<String, dynamic> json) {
+    final cats = (json['categories'] as List?)?.map((e) => e.toString()).toList();
+    String? icon = json['iconDesktopUrl']?.toString()
+        ?? json['icon']?.toString()
+        ?? json['icon_url']?.toString();
+    return AppItem(
+      id: (json['flatpakAppId'] ?? json['id'] ?? '').toString(),
+      name: (json['name'] ?? 'Unknown').toString(),
+      description: (json['summary'] ?? json['description'] ?? '').toString(),
+      version: (json['currentReleaseVersion'] ?? json['version'] ?? '').toString(),
+      category: cats?.firstOrNull ?? json['category']?.toString(),
+      iconUrl: icon,
+      developer: json['developer']?.toString() ?? json['developerName']?.toString(),
+      license: json['projectLicense']?.toString() ?? json['project_license']?.toString(),
+      isVerified: false,
+      expiresAt: null,
+    );
+  }
+
   factory AppItem.fromJson(Map<String, dynamic> json) {
     final rawDesc = (json['description'] ?? '').toString();
     final summary = (json['summary'] ?? '').toString();
@@ -200,6 +219,28 @@ class ApiService extends ChangeNotifier {
         return [];
       }
       return items.map((e) => AppItem.fromJson(e as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+
+  Future<List<AppItem>> fetchFlathubApps({int limit = 20, int offset = 0}) async {
+    try {
+      final page = (offset ~/ limit) + 1;
+      final uri = Uri.parse('https://flathub.org/api/v2/apps')
+          .replace(queryParameters: {'per_page': '$limit', 'page': '$page'});
+      final response = await _client
+          .get(uri, headers: {'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) return [];
+      final decoded = jsonDecode(response.body);
+      final List<dynamic> items = decoded is List
+          ? decoded
+          : (decoded['apps'] ?? decoded['data'] ?? []) as List;
+      return items
+          .map((e) => AppItem.fromFlathubJson(e as Map<String, dynamic>))
+          .toList();
     } catch (_) {
       return [];
     }
