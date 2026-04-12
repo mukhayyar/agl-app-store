@@ -1,15 +1,16 @@
-import 'dart:math' as math;
+import 'dart:math';
 import 'package:flutter/material.dart';
 
-/// Large automotive-style arc speedometer (0–120 km/h)
 class SpeedometerWidget extends StatefulWidget {
   final double speedKmh;
   final double maxSpeed;
+  final double size;
 
   const SpeedometerWidget({
     super.key,
     required this.speedKmh,
     this.maxSpeed = 120,
+    this.size = 260,
   });
 
   @override
@@ -20,7 +21,7 @@ class _SpeedometerWidgetState extends State<SpeedometerWidget>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
-  double _displaySpeed = 0.0;
+  double _prevSpeed = 0;
 
   @override
   void initState() {
@@ -29,22 +30,24 @@ class _SpeedometerWidgetState extends State<SpeedometerWidget>
       vsync: this,
       duration: const Duration(milliseconds: 400),
     );
-    _animation = Tween<double>(begin: 0, end: 0).animate(
+    _animation = Tween<double>(begin: 0, end: widget.speedKmh).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-    )..addListener(() {
-        setState(() => _displaySpeed = _animation.value);
-      });
+    );
+    _controller.forward();
   }
 
   @override
   void didUpdateWidget(SpeedometerWidget old) {
     super.didUpdateWidget(old);
-    if ((old.speedKmh - widget.speedKmh).abs() > 0.1) {
+    if (old.speedKmh != widget.speedKmh) {
+      _prevSpeed = _animation.value;
       _animation = Tween<double>(
-        begin: _displaySpeed,
+        begin: _prevSpeed,
         end: widget.speedKmh,
       ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
-      _controller.forward(from: 0);
+      _controller
+        ..reset()
+        ..forward();
     }
   }
 
@@ -56,46 +59,47 @@ class _SpeedometerWidgetState extends State<SpeedometerWidget>
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final size = math.min(constraints.maxWidth, 320.0);
-      return SizedBox(
-        width: size,
-        height: size,
-        child: CustomPaint(
-          painter: _SpeedometerPainter(
-            speed: _displaySpeed.clamp(0.0, widget.maxSpeed),
-            maxSpeed: widget.maxSpeed,
-          ),
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(height: 32),
-                Text(
-                  _displaySpeed.toStringAsFixed(0),
-                  style: const TextStyle(
-                    color: Color(0xFF00D4FF),
-                    fontSize: 64,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -2,
-                    height: 1.0,
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, _) {
+        return SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: CustomPaint(
+            painter: _SpeedometerPainter(
+              speed: _animation.value,
+              maxSpeed: widget.maxSpeed,
+            ),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 20),
+                  Text(
+                    _animation.value.toStringAsFixed(0),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 52,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -2,
+                    ),
                   ),
-                ),
-                const Text(
-                  'km/h',
-                  style: TextStyle(
-                    color: Color(0xFF556677),
-                    fontSize: 14,
-                    letterSpacing: 2,
-                    fontWeight: FontWeight.w400,
+                  const Text(
+                    'km/h',
+                    style: TextStyle(
+                      color: Color(0xFF00D4FF),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 2,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   }
 }
 
@@ -105,115 +109,168 @@ class _SpeedometerPainter extends CustomPainter {
 
   _SpeedometerPainter({required this.speed, required this.maxSpeed});
 
+  static const double _startAngle = pi * 0.75;  // 135°
+  static const double _sweepAngle = pi * 1.5;   // 270°
+
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 16;
+    final radius = size.width / 2 - 18;
 
-    const startAngle = math.pi * 0.72; // ~130 degrees from positive x
-    const sweepFull = math.pi * 1.56;  // ~281 degrees total
-
-    // Background track
-    final trackPaint = Paint()
-      ..color = const Color(0xFF1A1A2E)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 22
-      ..strokeCap = StrokeCap.round;
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      startAngle,
-      sweepFull,
-      false,
-      trackPaint,
+    // Background circle
+    canvas.drawCircle(
+      center,
+      size.width / 2,
+      Paint()..color = const Color(0xFF0D0D0D),
     );
 
-    // Colored arc: green → yellow → red gradient by speed zone
-    final fraction = speed / maxSpeed;
-    final valueSweep = sweepFull * fraction;
-
-    Color arcColor;
-    if (fraction < 0.5) {
-      arcColor = Color.lerp(const Color(0xFF00FF88), const Color(0xFFFFCC00), fraction * 2)!;
-    } else {
-      arcColor = Color.lerp(const Color(0xFFFFCC00), const Color(0xFFFF4444), (fraction - 0.5) * 2)!;
-    }
-
-    final arcPaint = Paint()
-      ..color = arcColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 22
-      ..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      startAngle,
-      valueSweep,
-      false,
-      arcPaint,
+    // Outer ring
+    canvas.drawCircle(
+      center,
+      size.width / 2 - 2,
+      Paint()
+        ..color = const Color(0xFF2A2A3E)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
     );
 
-    // Solid arc on top (no blur)
-    final arcPaintSolid = Paint()
-      ..color = arcColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 20
-      ..strokeCap = StrokeCap.round;
+    // Background arc
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
-      startAngle,
-      valueSweep,
+      _startAngle,
+      _sweepAngle,
       false,
-      arcPaintSolid,
+      Paint()
+        ..color = const Color(0xFF2A2A3E)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 16
+        ..strokeCap = StrokeCap.round,
     );
 
-    // Tick marks every 10 km/h
-    final tickPaint = Paint()
-      ..color = const Color(0xFF334455)
-      ..strokeWidth = 2.0;
-    final majorTickPaint = Paint()
-      ..color = const Color(0xFF556677)
-      ..strokeWidth = 2.5;
+    // Gradient arc (speed indicator)
+    final fraction = (speed / maxSpeed).clamp(0.0, 1.0);
+    if (fraction > 0) {
+      final sweepUsed = _sweepAngle * fraction;
 
-    for (int i = 0; i <= maxSpeed.toInt(); i += 10) {
-      final isMajor = i % 20 == 0;
-      final angle = startAngle + sweepFull * (i / maxSpeed);
-      final outerR = radius - 28;
-      final innerR = outerR - (isMajor ? 14 : 8);
-      final outer = center + Offset(math.cos(angle), math.sin(angle)) * outerR;
-      final inner = center + Offset(math.cos(angle), math.sin(angle)) * innerR;
-      canvas.drawLine(inner, outer, isMajor ? majorTickPaint : tickPaint);
-
-      // Speed labels at major ticks
-      if (isMajor) {
-        final labelRadius = innerR - 14;
-        final labelPos = center + Offset(math.cos(angle), math.sin(angle)) * labelRadius;
-        final tp = TextPainter(
-          text: TextSpan(
-            text: '$i',
-            style: const TextStyle(color: Color(0xFF667788), fontSize: 10),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, labelPos - Offset(tp.width / 2, tp.height / 2));
+      // Draw gradient arc in segments
+      const segments = 60;
+      final segmentSweep = sweepUsed / segments;
+      for (int i = 0; i < segments; i++) {
+        final t = i / segments;
+        final segAngle = _startAngle + sweepUsed * t;
+        Color segColor;
+        if (t < 0.5) {
+          // Green -> Yellow
+          segColor = Color.lerp(
+            const Color(0xFF00FF88),
+            const Color(0xFFFFAA00),
+            t * 2,
+          )!;
+        } else {
+          // Yellow -> Red
+          segColor = Color.lerp(
+            const Color(0xFFFFAA00),
+            const Color(0xFFFF2244),
+            (t - 0.5) * 2,
+          )!;
+        }
+        canvas.drawArc(
+          Rect.fromCircle(center: center, radius: radius),
+          segAngle,
+          segmentSweep + 0.01,
+          false,
+          Paint()
+            ..color = segColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 16
+            ..strokeCap = StrokeCap.butt,
+        );
       }
     }
 
-    // Needle
-    final needleAngle = startAngle + sweepFull * fraction;
-    final needleLen = radius - 36;
-    final needleTip = center + Offset(math.cos(needleAngle), math.sin(needleAngle)) * needleLen;
-    final needleBase = center + Offset(math.cos(needleAngle), math.sin(needleAngle)) * (-20);
+    // Tick marks and speed labels
+    _drawTicks(canvas, center, radius, size);
 
-    final needlePaint = Paint()
-      ..color = const Color(0xFFFF6644)
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(needleBase, needleTip, needlePaint);
+    // Needle
+    _drawNeedle(canvas, center, radius, fraction);
 
     // Center dot
-    canvas.drawCircle(center, 10, Paint()..color = const Color(0xFF223344));
-    canvas.drawCircle(center, 6, Paint()..color = const Color(0xFFFF6644));
-    canvas.drawCircle(center, 3, Paint()..color = const Color(0xFF00D4FF));
+    canvas.drawCircle(
+      center,
+      8,
+      Paint()..color = const Color(0xFF00D4FF),
+    );
+    canvas.drawCircle(
+      center,
+      4,
+      Paint()..color = Colors.white,
+    );
+  }
+
+  void _drawTicks(Canvas canvas, Offset center, double radius, Size size) {
+    final labelSpeeds = [0, 20, 40, 60, 80, 100, 120];
+    final majorTickPaint = Paint()
+      ..color = Colors.white54
+      ..strokeWidth = 2;
+    final minorTickPaint = Paint()
+      ..color = Colors.white24
+      ..strokeWidth = 1;
+
+    // Minor ticks every 10
+    for (int i = 0; i <= 120; i += 10) {
+      final t = i / maxSpeed;
+      final angle = _startAngle + _sweepAngle * t;
+      final isMajor = labelSpeeds.contains(i);
+      final outerR = radius - 18;
+      final innerR = isMajor ? outerR - 12 : outerR - 7;
+      canvas.drawLine(
+        Offset(center.dx + outerR * cos(angle), center.dy + outerR * sin(angle)),
+        Offset(center.dx + innerR * cos(angle), center.dy + innerR * sin(angle)),
+        isMajor ? majorTickPaint : minorTickPaint,
+      );
+    }
+
+    // Speed labels
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    for (final spd in labelSpeeds) {
+      final t = spd / maxSpeed;
+      final angle = _startAngle + _sweepAngle * t;
+      final labelR = radius - 48;
+      textPainter.text = TextSpan(
+        text: '$spd',
+        style: const TextStyle(color: Colors.white54, fontSize: 10),
+      );
+      textPainter.layout();
+      final dx = center.dx + labelR * cos(angle) - textPainter.width / 2;
+      final dy = center.dy + labelR * sin(angle) - textPainter.height / 2;
+      textPainter.paint(canvas, Offset(dx, dy));
+    }
+  }
+
+  void _drawNeedle(Canvas canvas, Offset center, double radius, double fraction) {
+    final angle = _startAngle + _sweepAngle * fraction;
+    final needleLength = radius - 30;
+    final tipX = center.dx + needleLength * cos(angle);
+    final tipY = center.dy + needleLength * sin(angle);
+
+    // Needle shadow
+    canvas.drawLine(
+      center,
+      Offset(tipX, tipY),
+      Paint()
+        ..color = Colors.black45
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round,
+    );
+    // Needle
+    canvas.drawLine(
+      center,
+      Offset(tipX, tipY),
+      Paint()
+        ..color = const Color(0xFF00D4FF)
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.round,
+    );
   }
 
   @override
