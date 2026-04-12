@@ -6,9 +6,20 @@ class FlatpakPlatform {
 
   static Stream<dynamic> installEvents() => _events.receiveBroadcastStream();
 
-  /// Installs a flatpak app from the given [remote] (e.g. `flathub` or
-  /// `repo.agl-store.cyou`). When [remote] is null the native plugin falls
-  /// back to its compiled-in default (PensHub).
+  /// Ensures the PensHub remote is registered on the host system.
+  /// Downloads the GPG key and runs `flatpak remote-add` if not already present.
+  ///
+  /// Returns a map:
+  ///   - `added` (bool): true if the remote was newly added
+  ///   - `alreadyExists` (bool): true if it was already configured
+  ///   - `error` (String?): non-null if something failed
+  static Future<Map<String, dynamic>> ensureRemote() async {
+    final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('ensureRemote');
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  /// Installs a flatpak app from the given [remote] (e.g. `flathub` or `penshub`).
+  /// When [remote] is null the native plugin falls back to its default (penshub).
   static Future<void> install(String appId, {String? remote}) async {
     await _channel.invokeMethod('installFlatpak', {
       'appId': appId,
@@ -28,7 +39,6 @@ class FlatpakPlatform {
   static Future<List<Map<String, String>>> listInstalled() async {
     final list = await _channel.invokeMethod<List<dynamic>>('listInstalled');
 
-    // Safely convert to strongly typed Map
     return (list ?? []).map((e) {
       final m = Map<String, dynamic>.from(e);
       return {
