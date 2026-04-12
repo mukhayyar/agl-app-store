@@ -262,7 +262,7 @@ static gchar *ensure_penshub_remote()
     g_spawn_async(nullptr, (gchar **)appstream_argv, nullptr,
                   G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, nullptr);
 
-    g_remove(kGpgTmpPath); // cleanup temp key file
+    remove(kGpgTmpPath); // cleanup temp key file
     return nullptr;        // success
 }
 
