@@ -14,18 +14,13 @@ static const char *kMethodIsInstalled = "isInstalled";
 static const char *kMethodListInstalled = "listInstalled";
 static const char *kMethodUninstall = "uninstallFlatpak";
 static const char *kMethodUpdate = "updateFlatpak";
+static const char *kMethodEnsureRemote = "ensureRemote";
 static const char *kEventsChannelName = "com.pens.flatpak/installer_events";
 
-// Flatpak remote that holds the AGL App Store (PensHub) packages.
-// The remote must already be added on the device (GPG-signed repo):
-//
-//   curl -s https://repo.agl-store.cyou/public.gpg | \
-//     flatpak remote-add --if-not-exists --gpg-import=/dev/stdin \
-//     penshub https://repo.agl-store.cyou
-//
-// Then install any app:
-//   flatpak install penshub com.pens.AsciiArt
 static const char *kFlatpakRemote = "penshub";
+static const char *kFlatpakRepoUrl = "https://repo.agl-store.cyou";
+static const char *kFlatpakGpgUrl = "https://repo.agl-store.cyou/public.gpg";
+static const char *kGpgTmpPath = "/tmp/penshub.gpg";
 
 static FlEventChannel *g_events_channel = nullptr;
 
@@ -64,10 +59,7 @@ static gboolean io_cb(GIOChannel *source, GIOCondition cond, gpointer user_data)
         GIOStatus st = g_io_channel_read_line(source, &line, &len, nullptr, &err);
         if (st == G_IO_STATUS_NORMAL && line)
         {
-
-            // 🔥 PRINT TO TERMINAL (YOU WILL SEE INSTALL PROCESS)
             g_print("[flatpak:%s] %s", app_id, line);
-            // Inside io_cb
             int step = -1;
             int total = -1;
             int percent = -1;
@@ -78,7 +70,6 @@ static gboolean io_cb(GIOChannel *source, GIOCondition cond, gpointer user_data)
                 fl_value_set_string_take(map, "type", fl_value_new_string("progress"));
                 fl_value_set_string_take(map, "appId", fl_value_new_string(app_id));
 
-                // Only send if valid (optional, but clean)
                 if (step > 0 && total > 0)
                 {
                     fl_value_set_string_take(map, "step", fl_value_new_int(step));
@@ -88,7 +79,6 @@ static gboolean io_cb(GIOChannel *source, GIOCondition cond, gpointer user_data)
                 fl_value_set_string_take(map, "percent", fl_value_new_int(percent));
                 send_event_map(map);
             }
-            // Send to Flutter
             FlValue *map = fl_value_new_map();
             fl_value_set_string_take(map, "type", fl_value_new_string("stdout"));
             fl_value_set_string_take(map, "appId", fl_value_new_string(app_id));
@@ -109,7 +99,6 @@ static gboolean io_cb(GIOChannel *source, GIOCondition cond, gpointer user_data)
     return TRUE;
 }
 
-// 2. UPDATED CHILD WATCH CALLBACK (The Standard Way)
 static void child_watch_cb(GPid pid, gint status, gpointer user_data)
 {
     const gchar *app_id = (const gchar *)user_data;
@@ -125,8 +114,6 @@ static void child_watch_cb(GPid pid, gint status, gpointer user_data)
     g_free((gpointer)app_id);
 }
 
-// ---------------- Helper: build argv & spawn ----------------
-// 1. Updated Function Signature
 static gboolean extract_progress(
     const gchar *line,
     int *step,
@@ -135,12 +122,10 @@ static gboolean extract_progress(
 {
     if (!line) return FALSE;
 
-    // reset defaults
     *step = -1;
     *total = -1;
     *percent = -1;
 
-    // --------- parse percent ---------
     const gchar *p = strchr(line, '%');
     if (p)
     {
@@ -157,7 +142,6 @@ static gboolean extract_progress(
         }
     }
 
-    // --------- parse step/total (n/m) ---------
     const gchar *slash = strchr(line, '/');
     if (slash)
     {
@@ -197,27 +181,25 @@ static gboolean spawn_and_capture(char const *const *argv_in,
                                   gint *exit_status,
                                   GError **error)
 {
-    // g_spawn_sync but we need non-const gchar** argv; make a copy.
     GPtrArray *arr = g_ptr_array_new();
     for (int i = 0; argv_in[i] != nullptr; ++i)
     {
         g_ptr_array_add(arr, g_strdup(argv_in[i]));
     }
-    g_ptr_array_add(arr, nullptr); // null-terminate
+    g_ptr_array_add(arr, nullptr);
 
     gboolean ok = g_spawn_sync(
-        /*working_directory=*/nullptr,
-        /*argv=*/(gchar **)arr->pdata, // safe: our array is non-const copy
-        /*envp=*/nullptr,
-        /*flags=*/G_SPAWN_SEARCH_PATH,
-        /*child_setup=*/nullptr,
-        /*user_data=*/nullptr,
-        /*standard_output=*/stdout_out,
-        /*standard_error=*/stderr_out,
-        /*exit_status=*/exit_status,
-        /*error=*/error);
+        nullptr,
+        (gchar **)arr->pdata,
+        nullptr,
+        G_SPAWN_SEARCH_PATH,
+        nullptr,
+        nullptr,
+        stdout_out,
+        stderr_out,
+        exit_status,
+        error);
 
-    // free argv copy
     for (guint i = 0; i + 1 < arr->len; ++i)
     {
         g_free(g_ptr_array_index(arr, i));
@@ -225,6 +207,63 @@ static gboolean spawn_and_capture(char const *const *argv_in,
     g_ptr_array_free(arr, TRUE);
 
     return ok;
+}
+
+// ---------------- ensureRemote helper ----------------
+// Returns nullptr on success, or an error string (must g_free).
+static gchar *ensure_penshub_remote()
+{
+    // 1. Check if penshub remote already exists
+    const char *list_argv[] = {"flatpak", "remote-list", "--user", nullptr};
+    gchar *list_out = nullptr;
+    spawn_and_capture(list_argv, &list_out, nullptr, nullptr, nullptr);
+
+    gboolean exists = list_out && (strstr(list_out, kFlatpakRemote) != nullptr);
+    g_free(list_out);
+
+    if (exists)
+        return nullptr; // already set up
+
+    // 2. Download GPG key
+    const char *curl_argv[] = {
+        "curl", "-s", "--max-time", "30",
+        kFlatpakGpgUrl, "-o", kGpgTmpPath, nullptr};
+    gint curl_status = -1;
+    gboolean curl_ok = spawn_and_capture(curl_argv, nullptr, nullptr, &curl_status, nullptr);
+
+    if (!curl_ok || curl_status != 0)
+    {
+        return g_strdup_printf("Failed to download GPG key from %s (exit %d)", kFlatpakGpgUrl, curl_status);
+    }
+
+    // 3. Add remote with GPG verification
+    gchar *gpg_arg = g_strdup_printf("--gpg-import=%s", kGpgTmpPath);
+    const char *add_argv[] = {
+        "flatpak", "remote-add", "--user", "--if-not-exists",
+        gpg_arg, kFlatpakRemote, kFlatpakRepoUrl, nullptr};
+    gint add_status = -1;
+    gchar *add_err = nullptr;
+    gboolean add_ok = spawn_and_capture(add_argv, nullptr, &add_err, &add_status, nullptr);
+    g_free(gpg_arg);
+
+    if (!add_ok || add_status != 0)
+    {
+        gchar *msg = g_strdup_printf("Failed to add remote '%s' (exit %d): %s",
+                                     kFlatpakRemote, add_status,
+                                     add_err ? add_err : "unknown error");
+        g_free(add_err);
+        return msg;
+    }
+    g_free(add_err);
+
+    // 4. Refresh appstream cache (background — don't block startup)
+    const char *appstream_argv[] = {
+        "flatpak", "update", "--appstream", "--user", kFlatpakRemote, nullptr};
+    g_spawn_async(nullptr, (gchar **)appstream_argv, nullptr,
+                  G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, nullptr);
+
+    g_remove(kGpgTmpPath); // cleanup temp key file
+    return nullptr;        // success
 }
 
 // ---------------- Method Handler ----------------
@@ -237,11 +276,45 @@ static void method_call_cb(FlMethodChannel *channel,
 
     const gchar *method = fl_method_call_get_name(method_call);
 
+    // ---- ensureRemote() -> {added: bool, error: string?} ----
+    if (g_strcmp0(method, kMethodEnsureRemote) == 0)
+    {
+        // Check if remote already existed before setup
+        const char *list_argv[] = {"flatpak", "remote-list", "--user", nullptr};
+        gchar *list_out = nullptr;
+        spawn_and_capture(list_argv, &list_out, nullptr, nullptr, nullptr);
+        gboolean already_existed = list_out && (strstr(list_out, kFlatpakRemote) != nullptr);
+        g_free(list_out);
+
+        gchar *err_msg = ensure_penshub_remote();
+
+        FlValue *result = fl_value_new_map();
+        fl_value_set_string_take(result, "added",
+            fl_value_new_bool(!already_existed && err_msg == nullptr));
+        fl_value_set_string_take(result, "alreadyExists",
+            fl_value_new_bool(already_existed));
+
+        if (err_msg)
+        {
+            fl_value_set_string_take(result, "error", fl_value_new_string(err_msg));
+            g_free(err_msg);
+        }
+        else
+        {
+            fl_value_set_string_take(result, "error", fl_value_new_null());
+        }
+
+        g_autoptr(FlMethodResponse) resp =
+            FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+        fl_method_call_respond(method_call, resp, nullptr);
+        return;
+    }
+
     // ---- installFlatpak(appId, remote?) ----
     if (g_strcmp0(method, kMethodInstall) == 0)
     {
         const gchar *app_id = nullptr;
-        const gchar *remote = kFlatpakRemote; // default: PensHub
+        const gchar *remote = kFlatpakRemote;
         if (FlValue *args = fl_method_call_get_args(method_call))
         {
             if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
@@ -270,27 +343,18 @@ static void method_call_cb(FlMethodChannel *channel,
             return;
         }
 
-        // --- ASYNC install, no freeze ---
         gchar *argv[] = {
-            (gchar *)"flatpak", (gchar *)"install", (gchar *)"--user",
-            (gchar *)remote, (gchar *)app_id, (gchar *)"-y", nullptr};
+            (gchar *)"flatpak", (gchar *)"install", (gchar *)remote,
+            (gchar *)app_id, (gchar *)"-y", nullptr};
 
         GPid pid = 0;
         gint out_fd = -1, err_fd = -1;
         GError *error = nullptr;
 
         gboolean ok = g_spawn_async_with_pipes(
-            /*working_directory=*/nullptr,
-            /*argv=*/argv,
-            /*envp=*/nullptr,
-            /*flags=*/(GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD),
-            /*child_setup=*/nullptr,
-            /*user_data=*/nullptr,
-            /*child_pid=*/&pid,
-            /*stdin_fd=*/nullptr,
-            /*stdout_fd=*/&out_fd,
-            /*stderr_fd=*/&err_fd,
-            /*error=*/&error);
+            nullptr, argv, nullptr,
+            (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD),
+            nullptr, nullptr, &pid, nullptr, &out_fd, &err_fd, &error);
 
         if (!ok)
         {
@@ -303,36 +367,29 @@ static void method_call_cb(FlMethodChannel *channel,
             return;
         }
 
-        // Watch stdout
         GIOChannel *out_ch = g_io_channel_unix_new(out_fd);
-        g_io_channel_set_encoding(out_ch, nullptr, nullptr); // binary
+        g_io_channel_set_encoding(out_ch, nullptr, nullptr);
         g_io_add_watch(out_ch,
                        (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
-                       io_cb,
-                       g_strdup(app_id)); // freed in child_watch_cb
+                       io_cb, g_strdup(app_id));
 
-        // (opsional) watch stderr juga, bisa pakai callback sama
         GIOChannel *err_ch = g_io_channel_unix_new(err_fd);
         g_io_channel_set_encoding(err_ch, nullptr, nullptr);
         g_io_add_watch(err_ch,
                        (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
-                       io_cb,
-                       g_strdup(app_id));
+                       io_cb, g_strdup(app_id));
 
-        // Watch proses selesai
         g_child_watch_add(pid, child_watch_cb, g_strdup(app_id));
 
-        // Balas segera supaya UI tidak block
         g_autoptr(FlMethodResponse) resp =
             FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
         fl_method_call_respond(method_call, resp, nullptr);
         return;
     }
 
-    // ---- launchFlatpak(appId) [NEW] ----
+    // ---- launchFlatpak(appId) ----
     if (g_strcmp0(method, kMethodLaunch) == 0)
     {
-        // 1. Declare and Extract app_id locally to ensure it exists in this scope
         const gchar *app_id = nullptr;
         if (FlValue *args = fl_method_call_get_args(method_call))
         {
@@ -346,26 +403,18 @@ static void method_call_cb(FlMethodChannel *channel,
             }
         }
 
-        // 2. Validate it
         if (!app_id || std::strlen(app_id) == 0)
         {
             fl_method_call_respond(method_call, FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_ID", "No ID provided", nullptr)), nullptr);
             return;
         }
 
-        // 3. Run flatpak command
         gchar *argv[] = {(gchar *)"flatpak", (gchar *)"run", (gchar *)app_id, nullptr};
         GError *error = nullptr;
 
         gboolean ok = g_spawn_async(
-            nullptr,
-            argv,
-            nullptr,
-            G_SPAWN_SEARCH_PATH,
-            nullptr,
-            nullptr,
-            nullptr,
-            &error);
+            nullptr, argv, nullptr, G_SPAWN_SEARCH_PATH,
+            nullptr, nullptr, nullptr, &error);
 
         if (!ok)
         {
@@ -404,17 +453,14 @@ static void method_call_cb(FlMethodChannel *channel,
             return;
         }
 
-        const char *argv[] = {"flatpak", "info", "--user", app_id, nullptr};
+        const char *argv[] = {"flatpak", "info", app_id, nullptr};
         gint status = -1;
         GError *error = nullptr;
         gchar *out = nullptr;
         gboolean ok = spawn_and_capture(argv, &out, nullptr, &status, &error);
-        if (out)
-            g_free(out);
-        if (error)
-            g_error_free(error);
+        if (out) g_free(out);
+        if (error) g_error_free(error);
 
-        // status 0 jika app ditemukan/terpasang
         FlValue *result = fl_value_new_bool(ok && status == 0);
         g_autoptr(FlMethodResponse) resp =
             FL_METHOD_RESPONSE(fl_method_success_response_new(result));
@@ -422,11 +468,10 @@ static void method_call_cb(FlMethodChannel *channel,
         return;
     }
 
-    // ---- listInstalled() -> List<String> app-ids ----
+    // ---- listInstalled() -> List<Map> ----
     if (g_strcmp0(method, kMethodListInstalled) == 0)
     {
-        // We request 'application' (ID) and 'name' columns
-        const char *argv[] = {"flatpak", "list", "--user", "--app", "--columns=application,name", nullptr};
+        const char *argv[] = {"flatpak", "list", "--app", "--columns=application,name", nullptr};
         gchar *out = nullptr;
         spawn_and_capture(argv, &out, nullptr, nullptr, nullptr);
 
@@ -438,15 +483,12 @@ static void method_call_cb(FlMethodChannel *channel,
             {
                 if (**p)
                 {
-                    // Split by tab (default flatpak output separator)
                     gchar **cols = g_strsplit(*p, "\t", -1);
                     if (cols)
                     {
-                        // Safe extraction
                         const gchar *id = cols[0];
                         const gchar *name = (g_strv_length(cols) > 1) ? cols[1] : id;
 
-                        // Create a Map { "id": "...", "name": "..." }
                         FlValue *map = fl_value_new_map();
                         fl_value_set_string_take(map, "id", fl_value_new_string(id));
                         fl_value_set_string_take(map, "name", fl_value_new_string(name));
@@ -483,73 +525,49 @@ static void method_call_cb(FlMethodChannel *channel,
         {
             fl_method_call_respond(
                 method_call,
-                FL_METHOD_RESPONSE(
-                    fl_method_error_response_new("INVALID_APP_ID", "App ID cannot be null", nullptr)),
+                FL_METHOD_RESPONSE(fl_method_error_response_new("INVALID_APP_ID", "App ID cannot be null", nullptr)),
                 nullptr);
             return;
         }
 
-        // 🔥 ASYNC uninstall (NO UI FREEZE)
         gchar *argv[] = {
-            (gchar *)"flatpak",
-            (gchar *)"uninstall",
-            (gchar *)"--user",
-            (gchar *)app_id,
-            (gchar *)"-y",
-            nullptr};
+            (gchar *)"flatpak", (gchar *)"uninstall",
+            (gchar *)app_id, (gchar *)"-y", nullptr};
 
         GPid pid = 0;
         gint out_fd = -1, err_fd = -1;
         GError *error = nullptr;
 
         gboolean ok = g_spawn_async_with_pipes(
-            nullptr,
-            argv,
-            nullptr,
+            nullptr, argv, nullptr,
             (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD),
-            nullptr,
-            nullptr,
-            &pid,
-            nullptr,
-            &out_fd,
-            &err_fd,
-            &error);
+            nullptr, nullptr, &pid, nullptr, &out_fd, &err_fd, &error);
 
         if (!ok)
         {
             const gchar *msg = error ? error->message : "Failed to uninstall";
             fl_method_call_respond(
                 method_call,
-                FL_METHOD_RESPONSE(
-                    fl_method_error_response_new("SPAWN_FAILED", msg, nullptr)),
+                FL_METHOD_RESPONSE(fl_method_error_response_new("SPAWN_FAILED", msg, nullptr)),
                 nullptr);
-            if (error)
-                g_error_free(error);
+            if (error) g_error_free(error);
             return;
         }
 
-        // stdout
         GIOChannel *out_ch = g_io_channel_unix_new(out_fd);
         g_io_channel_set_encoding(out_ch, nullptr, nullptr);
-        g_io_add_watch(
-            out_ch,
-            (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
-            io_cb,
-            g_strdup(app_id));
+        g_io_add_watch(out_ch,
+                       (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
+                       io_cb, g_strdup(app_id));
 
-        // stderr
         GIOChannel *err_ch = g_io_channel_unix_new(err_fd);
         g_io_channel_set_encoding(err_ch, nullptr, nullptr);
-        g_io_add_watch(
-            err_ch,
-            (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
-            io_cb,
-            g_strdup(app_id));
+        g_io_add_watch(err_ch,
+                       (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL),
+                       io_cb, g_strdup(app_id));
 
-        // process exit
         g_child_watch_add(pid, child_watch_cb, g_strdup(app_id));
 
-        // 🔥 respond immediately → UI does NOT block
         fl_method_call_respond(
             method_call,
             FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr)),
@@ -580,7 +598,7 @@ static void method_call_cb(FlMethodChannel *channel,
             return;
         }
 
-        const char *argv[] = {"flatpak", "update", "--user", app_id, "-y", nullptr};
+        const char *argv[] = {"flatpak", "update", app_id, "-y", nullptr};
         gint status = -1;
         GError *error = nullptr;
         gboolean ok = spawn_and_capture(argv, nullptr, nullptr, &status, &error);
@@ -590,8 +608,7 @@ static void method_call_cb(FlMethodChannel *channel,
             const gchar *msg = error ? error->message : "Failed to update";
             g_autoptr(FlMethodResponse) resp =
                 FL_METHOD_RESPONSE(fl_method_error_response_new("UPDATE_FAILED", msg, nullptr));
-            if (error)
-                g_error_free(error);
+            if (error) g_error_free(error);
             fl_method_call_respond(method_call, resp, nullptr);
             return;
         }
@@ -602,7 +619,6 @@ static void method_call_cb(FlMethodChannel *channel,
         return;
     }
 
-    // ---- not implemented ----
     g_autoptr(FlMethodResponse) resp =
         FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
     fl_method_call_respond(method_call, resp, nullptr);
@@ -639,10 +655,8 @@ void flathub_installer_plugin_register_with_registrar(FlPluginRegistrar *registr
     plugin->channel = fl_method_channel_new(messenger, kChannelName, FL_METHOD_CODEC(codec));
     fl_method_channel_set_method_call_handler(plugin->channel, method_call_cb, g_object_ref(plugin), g_object_unref);
 
-    // event channel
     g_autoptr(FlStandardMethodCodec) evcodec = fl_standard_method_codec_new();
     g_events_channel = fl_event_channel_new(messenger, kEventsChannelName, FL_METHOD_CODEC(evcodec));
-    // tidak perlu handler khusus; kita hanya "send"
 
     g_object_unref(plugin);
 }
