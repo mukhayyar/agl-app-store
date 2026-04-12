@@ -81,7 +81,7 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
         if (mounted) context.read<FlatpakBloc>().add(const RefreshAll());
       }
       if (result['error'] != null) {
-        debugPrint('[PensHub] Remote setup failed: \${result['error']}');
+        debugPrint('[PensHub] Remote setup failed: ${result["error"]}');
       }
     } catch (e) {
       debugPrint('[PensHub] ensureRemote error: \$e');
