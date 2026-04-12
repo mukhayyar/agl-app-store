@@ -391,7 +391,7 @@ class _AppCard extends StatelessWidget {
     final isPens = repo == _Repo.pensHub;
     final accentColor = isPens ? const Color(0xFF00D4FF) : const Color(0xFFFF6B35);
     final installCmd = isPens
-        ? 'flatpak install repo.agl-store.cyou ${app.id}'
+        ? 'flatpak install penshub ${app.id}'
         : 'flatpak install flathub ${app.id}';
 
     showDialog(
