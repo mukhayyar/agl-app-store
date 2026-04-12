@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:provider/provider.dart';
@@ -15,6 +16,7 @@ import 'pages/monitor_page.dart';
 import 'services/system_monitor.dart';
 import 'services/gps_service.dart';
 import 'services/api_benchmark.dart';
+import 'platform/flatpak_platform.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_spacing.dart';
 import 'theme/app_theme.dart';
@@ -68,6 +70,22 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
   void initState() {
     super.initState();
     _scrollCtl.addListener(_onScroll);
+    _setupPensHubRemote();
+  }
+
+  Future<void> _setupPensHubRemote() async {
+    try {
+      final result = await FlatpakPlatform.ensureRemote();
+      if (result['added'] == true && mounted) {
+        // Remote was newly added — reload app list so PensHub apps appear
+        if (mounted) context.read<FlatpakBloc>().add(const RefreshAll());
+      }
+      if (result['error'] != null) {
+        debugPrint('[PensHub] Remote setup failed: \${result['error']}');
+      }
+    } catch (e) {
+      debugPrint('[PensHub] ensureRemote error: \$e');
+    }
   }
 
   void _onScroll() {
