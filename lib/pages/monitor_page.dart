@@ -4,17 +4,10 @@ import 'package:provider/provider.dart';
 
 import '../services/system_monitor.dart';
 import '../services/gps_service.dart';
-import '../services/api_benchmark.dart';
+import '../services/api_service.dart';
 import '../widgets/gauge_widget.dart';
 import '../widgets/speedometer_widget.dart';
 import '../widgets/line_chart_widget.dart';
-
-// ─────────────────────────── Colour tokens ───────────────────────────
-const _bg = Color(0xFF0D0D0D);
-const _surface = Color(0xFF1A1A2E);
-const _accent = Color(0xFF00D4FF);
-const _textPrimary = Colors.white;
-final _textSecondary = Colors.white.withOpacity(0.55);
 
 class MonitorPage extends StatefulWidget {
   const MonitorPage({super.key});
@@ -24,687 +17,623 @@ class MonitorPage extends StatefulWidget {
 }
 
 class _MonitorPageState extends State<MonitorPage> {
-  // ── Latency history ──────────────────────────────────────────────────
-  final List<double?> _latencyHistory = List.filled(30, null);
-  Timer? _latencyTimer;
-  double? _currentLatencyMs;
-
-  // ── Benchmark state ──────────────────────────────────────────────────
+  // Benchmark state
   bool _benchRunning = false;
-  BenchmarkResult? _lastBenchResult;
+  BenchmarkResult? _benchResult;
+  double? _throughputMbps;
+  Timer? _throughputTimer;
 
   @override
   void initState() {
     super.initState();
-    _startLatencyPoll();
+    // Measure throughput every 30s
+    _measureThroughput();
+    _throughputTimer = Timer.periodic(const Duration(seconds: 30), (_) => _measureThroughput());
   }
 
   @override
   void dispose() {
-    _latencyTimer?.cancel();
+    _throughputTimer?.cancel();
     super.dispose();
   }
 
-  void _startLatencyPoll() {
-    _latencyTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      final bench = context.read<ApiBenchmark>();
-      final ms = await bench.measureLatency();
-      if (!mounted) return;
-      setState(() {
-        _latencyHistory.removeAt(0);
-        _latencyHistory.add(ms);
-        _currentLatencyMs = ms;
-      });
-    });
+  Future<void> _measureThroughput() async {
+    final api = context.read<ApiService>();
+    final mb = await api.measureThroughput();
+    if (mounted) setState(() => _throughputMbps = mb);
   }
 
   Future<void> _runBenchmark() async {
     if (_benchRunning) return;
-    setState(() => _benchRunning = true);
-    final bench = context.read<ApiBenchmark>();
-    final result = await bench.runBenchmark(count: 50);
-    if (!mounted) return;
     setState(() {
-      _benchRunning = false;
-      _lastBenchResult = result;
+      _benchRunning = true;
+      _benchResult = null;
     });
+    final api = context.read<ApiService>();
+    final result = await api.runBenchmark(count: 50);
+    if (mounted) {
+      setState(() {
+        _benchRunning = false;
+        _benchResult = result;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final monitor = context.watch<SystemMonitor>();
-    final gps = context.watch<GpsService>();
-
     return Scaffold(
-      backgroundColor: _bg,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── Header ─────────────────────────────────────────────
-              Row(
-                children: [
-                  const Icon(Icons.monitor_heart, color: _accent, size: 22),
-                  const SizedBox(width: 8),
-                  Text(
-                    'IVI Monitor',
+      appBar: AppBar(
+        title: const Row(
+          children: [
+            Icon(Icons.monitor_heart_rounded, color: Color(0xFF00D4FF), size: 20),
+            SizedBox(width: 8),
+            Text('System Monitor'),
+          ],
+        ),
+        actions: [
+          Consumer<SystemMonitor>(
+            builder: (_, mon, __) => Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: const Color(0xFF00FF88).withOpacity(0.4)),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text(
+                    'LIVE',
                     style: TextStyle(
-                      color: _textPrimary,
-                      fontSize: 20,
+                      color: Color(0xFF00FF88),
+                      fontSize: 10,
                       fontWeight: FontWeight.bold,
+                      letterSpacing: 1.5,
                     ),
                   ),
-                  const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _accent.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF00FF88),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        const Text(
-                          'LIVE',
-                          style: TextStyle(
-                            color: Color(0xFF00FF88),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                ),
               ),
-              const SizedBox(height: 20),
-
-              // ── Section A: System Usage ─────────────────────────────
-              _sectionLabel('SYSTEM USAGE'),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(child: _CpuCard(monitor: monitor)),
-                  const SizedBox(width: 10),
-                  Expanded(child: _RamCard(monitor: monitor)),
-                  const SizedBox(width: 10),
-                  Expanded(child: _DiskCard(monitor: monitor)),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              // ── Section B: Network ──────────────────────────────────
-              _sectionLabel('NETWORK'),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: _LatencyCard(
-                      history: _latencyHistory,
-                      currentMs: _currentLatencyMs,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _ThroughputCard(
-                      monitor: monitor,
-                      benchRunning: _benchRunning,
-                      lastResult: _lastBenchResult,
-                      onRunBenchmark: _runBenchmark,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              // ── Section C: Speed & GPS ──────────────────────────────
-              _sectionLabel('SPEED & GPS'),
-              const SizedBox(height: 10),
-              _SpeedGpsCard(
-                gps: gps,
-                benchRunning: _benchRunning,
-                lastResult: _lastBenchResult,
-                onRunBenchmark: _runBenchmark,
-              ),
-              const SizedBox(height: 20),
-            ],
+            ),
           ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionLabel(label: 'A — SYSTEM USAGE'),
+            const SizedBox(height: 12),
+            const _SystemUsageSection(),
+            const SizedBox(height: 24),
+            _SectionLabel(label: 'B — NETWORK MONITOR'),
+            const SizedBox(height: 12),
+            _NetworkSection(
+              throughputMbps: _throughputMbps,
+            ),
+            const SizedBox(height: 24),
+            _SectionLabel(label: 'C — SPEED & GPS'),
+            const SizedBox(height: 12),
+            _SpeedSection(
+              benchRunning: _benchRunning,
+              benchResult: _benchResult,
+              onRunBenchmark: _runBenchmark,
+            ),
+          ],
         ),
       ),
     );
   }
+}
 
-  Widget _sectionLabel(String text) {
-    return Text(
-      text,
-      style: TextStyle(
-        color: _accent,
-        fontSize: 11,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 2,
-      ),
+class _SectionLabel extends StatelessWidget {
+  final String label;
+  const _SectionLabel({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 3,
+          height: 16,
+          decoration: BoxDecoration(
+            color: const Color(0xFF00D4FF),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF00D4FF),
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2,
+          ),
+        ),
+      ],
     );
   }
 }
 
-// ─────────────────────────── CPU Card ────────────────────────────────
-class _CpuCard extends StatelessWidget {
-  final SystemMonitor monitor;
-  const _CpuCard({required this.monitor});
+// ─── Section A: System Usage ──────────────────────────────────────────────────
+
+class _SystemUsageSection extends StatelessWidget {
+  const _SystemUsageSection();
 
   @override
   Widget build(BuildContext context) {
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const _CardTitle(text: 'CPU'),
-          const SizedBox(height: 8),
-          GaugeWidget(value: monitor.cpu, size: 90, label: 'CPU'),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 40,
-            child: LineChartWidget(
-              data: monitor.cpuHistory,
-              maxValue: 100,
-              color: _cpuColor(monitor.cpu),
+    return Consumer<SystemMonitor>(
+      builder: (_, mon, __) {
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                // Gauges row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    GaugeWidget(
+                      value: mon.cpuPercent,
+                      label: 'CPU',
+                      subLabel: null,
+                    ),
+                    GaugeWidget(
+                      value: mon.ramPercent,
+                      label: 'RAM',
+                      subLabel: '${mon.ramUsedMb}/${mon.ramTotalMb}M',
+                    ),
+                    GaugeWidget(
+                      value: mon.diskPercent,
+                      label: 'DISK',
+                      subLabel: '${mon.diskUsedGb}/${mon.diskTotalGb}G',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                // CPU history chart
+                MetricLineChart(
+                  data: List<double>.from(mon.cpuHistory),
+                  label: 'CPU % (30s)',
+                  color: _gaugeColor(mon.cpuPercent),
+                  unit: '%',
+                  maxY: 100,
+                ),
+                const SizedBox(height: 12),
+                // RAM history chart
+                MetricLineChart(
+                  data: List<double>.from(mon.ramHistory),
+                  label: 'RAM % (30s)',
+                  color: _gaugeColor(mon.ramPercent),
+                  unit: '%',
+                  maxY: 100,
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Color _cpuColor(double v) {
-    if (v < 60) return const Color(0xFF00D4FF);
-    if (v < 80) return const Color(0xFFFFAA00);
+  Color _gaugeColor(double v) {
+    if (v < 60) return const Color(0xFF00FF88);
+    if (v < 80) return const Color(0xFFFFCC00);
     return const Color(0xFFFF4444);
   }
 }
 
-// ─────────────────────────── RAM Card ────────────────────────────────
-class _RamCard extends StatelessWidget {
-  final SystemMonitor monitor;
-  const _RamCard({required this.monitor});
+// ─── Section B: Network Monitor ───────────────────────────────────────────────
+
+class _NetworkSection extends StatelessWidget {
+  final double? throughputMbps;
+
+  const _NetworkSection({this.throughputMbps});
 
   @override
   Widget build(BuildContext context) {
-    final pct = monitor.ramTotalMb > 0
-        ? (monitor.ramUsedMb / monitor.ramTotalMb * 100)
-        : 0.0;
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const _CardTitle(text: 'RAM'),
-          const SizedBox(height: 8),
-          GaugeWidget(value: pct, size: 90, label: 'RAM'),
-          const SizedBox(height: 4),
-          Text(
-            '${monitor.ramUsedMb.toStringAsFixed(0)} / ${monitor.ramTotalMb.toStringAsFixed(0)} MB',
-            style: TextStyle(color: _textSecondary, fontSize: 10),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 4),
-          SizedBox(
-            height: 40,
-            child: LineChartWidget(
-              data: monitor.ramHistory,
-              maxValue: 100,
-              color: const Color(0xFF9C6FFF),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────── Disk Card ───────────────────────────────
-class _DiskCard extends StatelessWidget {
-  final SystemMonitor monitor;
-  const _DiskCard({required this.monitor});
-
-  @override
-  Widget build(BuildContext context) {
-    final pct = monitor.diskTotalGb > 0
-        ? (monitor.diskUsedGb / monitor.diskTotalGb)
-        : 0.0;
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _CardTitle(text: 'DISK'),
-          const SizedBox(height: 12),
-          Text(
-            '${monitor.diskUsedGb.toStringAsFixed(1)} GB used',
-            style: const TextStyle(
-              color: _textPrimary,
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'of ${monitor.diskTotalGb.toStringAsFixed(1)} GB',
-            style: TextStyle(color: _textSecondary, fontSize: 11),
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: pct.clamp(0, 1),
-              minHeight: 8,
-              backgroundColor: const Color(0xFF2A2A3E),
-              valueColor: AlwaysStoppedAnimation<Color>(
-                pct < 0.7
-                    ? const Color(0xFF00D4FF)
-                    : pct < 0.9
-                        ? const Color(0xFFFFAA00)
-                        : const Color(0xFFFF4444),
-              ),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${(pct * 100).toStringAsFixed(0)}% used',
-            style: TextStyle(color: _textSecondary, fontSize: 10),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────── Latency Card ────────────────────────────
-class _LatencyCard extends StatelessWidget {
-  final List<double?> history;
-  final double? currentMs;
-
-  const _LatencyCard({required this.history, required this.currentMs});
-
-  @override
-  Widget build(BuildContext context) {
-    final displayData = history
-        .map((v) => v ?? 0.0)
-        .toList();
-    final maxMs = displayData.isEmpty
-        ? 500.0
-        : (displayData.reduce((a, b) => a > b ? a : b) * 1.2).clamp(50, 2000).toDouble();
-
-    Color badgeColor;
-    String badgeText;
-    if (currentMs == null) {
-      badgeColor = Colors.grey;
-      badgeText = '-- ms';
-    } else if (currentMs! < 100) {
-      badgeColor = const Color(0xFF00FF88);
-      badgeText = '${currentMs!.toStringAsFixed(0)} ms';
-    } else if (currentMs! < 300) {
-      badgeColor = const Color(0xFFFFAA00);
-      badgeText = '${currentMs!.toStringAsFixed(0)} ms';
-    } else {
-      badgeColor = const Color(0xFFFF4444);
-      badgeText = '${currentMs!.toStringAsFixed(0)} ms';
-    }
-
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const _CardTitle(text: 'LATENCY'),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: badgeColor.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  badgeText,
-                  style: TextStyle(
-                    color: badgeColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 70,
-            child: LineChartWidget(
-              data: displayData,
-              maxValue: maxMs,
-              color: badgeColor,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'AGL backend ping (last 30)',
-            style: TextStyle(color: _textSecondary, fontSize: 10),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────── Throughput Card ─────────────────────────
-class _ThroughputCard extends StatelessWidget {
-  final SystemMonitor monitor;
-  final bool benchRunning;
-  final BenchmarkResult? lastResult;
-  final VoidCallback onRunBenchmark;
-
-  const _ThroughputCard({
-    required this.monitor,
-    required this.benchRunning,
-    required this.lastResult,
-    required this.onRunBenchmark,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _CardTitle(text: 'THROUGHPUT'),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              _NetBadge(
-                label: 'RX',
-                value: _formatBytes(monitor.rxBytesPerSec),
-                color: const Color(0xFF00FF88),
-              ),
-              const SizedBox(width: 8),
-              _NetBadge(
-                label: 'TX',
-                value: _formatBytes(monitor.txBytesPerSec),
-                color: const Color(0xFF00D4FF),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (lastResult != null) ...[
-            _ResultChip(
-              label: 'RPS',
-              value: lastResult!.rps.toStringAsFixed(1),
-            ),
-            const SizedBox(height: 4),
-            _ResultChip(
-              label: 'AVG',
-              value: '${lastResult!.avgMs.toStringAsFixed(0)} ms',
-            ),
-            const SizedBox(height: 4),
-            _ResultChip(
-              label: 'OK',
-              value: '${lastResult!.successCount}/${lastResult!.totalCount}',
-            ),
-            const SizedBox(height: 8),
-          ],
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: benchRunning ? null : onRunBenchmark,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3A5F),
-                foregroundColor: _accent,
-                disabledBackgroundColor: const Color(0xFF1E1E2E),
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: benchRunning
-                  ? const SizedBox(
-                      height: 16,
-                      width: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(_accent),
+    return Consumer2<ApiService, SystemMonitor>(
+      builder: (_, api, mon, __) {
+        final pingOnline = api.pingLatencyMs >= 0;
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                // Ping + throughput stats row
+                Row(
+                  children: [
+                    Expanded(
+                      child: _NetStatBox(
+                        label: 'PING',
+                        value: pingOnline
+                            ? '${api.pingLatencyMs.toStringAsFixed(0)} ms'
+                            : 'Timeout',
+                        color: pingOnline
+                            ? _pingColor(api.pingLatencyMs)
+                            : const Color(0xFFFF4444),
+                        sub: pingOnline
+                            ? 'min:${api.pingMin == double.infinity ? "--" : api.pingMin.toStringAsFixed(0)} avg:${api.pingAvg.toStringAsFixed(0)} max:${api.pingMax.toStringAsFixed(0)}'
+                            : 'No connection',
                       ),
-                    )
-                  : const Text('Run API Test', style: TextStyle(fontSize: 12)),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _NetStatBox(
+                        label: 'THROUGHPUT',
+                        value: throughputMbps != null
+                            ? '${throughputMbps!.toStringAsFixed(2)} MB/s'
+                            : '--- MB/s',
+                        color: const Color(0xFF00D4FF),
+                        sub: 'HTTP download',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // RX/TX rates
+                Row(
+                  children: [
+                    Expanded(
+                      child: _NetStatBox(
+                        label: 'RX',
+                        value: _formatBytes(mon.netRxRate),
+                        color: const Color(0xFF00FF88),
+                        sub: 'Total: ${_formatBytesTotal(mon.netRxBytes)}',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _NetStatBox(
+                        label: 'TX',
+                        value: _formatBytes(mon.netTxRate),
+                        color: const Color(0xFFFFAA00),
+                        sub: 'Total: ${_formatBytesTotal(mon.netTxBytes)}',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // Ping chart
+                MetricLineChart(
+                  data: List<double>.from(api.pingHistory),
+                  label: 'Ping latency ms (30s)',
+                  color: pingOnline ? _pingColor(api.pingLatencyMs) : const Color(0xFF445566),
+                  unit: 'ms',
+                ),
+                const SizedBox(height: 12),
+                // RX chart
+                MetricLineChart(
+                  data: List<double>.from(mon.rxHistory),
+                  label: 'RX KB/s (30s)',
+                  color: const Color(0xFF00FF88),
+                  unit: 'K',
+                ),
+                const SizedBox(height: 12),
+                // TX chart
+                MetricLineChart(
+                  data: List<double>.from(mon.txHistory),
+                  label: 'TX KB/s (30s)',
+                  color: const Color(0xFFFFAA00),
+                  unit: 'K',
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  Color _pingColor(double ms) {
+    if (ms < 50) return const Color(0xFF00FF88);
+    if (ms < 150) return const Color(0xFFFFCC00);
+    return const Color(0xFFFF4444);
   }
 
   String _formatBytes(double bytesPerSec) {
     if (bytesPerSec >= 1024 * 1024) {
-      return '${(bytesPerSec / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+      return '${(bytesPerSec / 1024 / 1024).toStringAsFixed(2)} MB/s';
     } else if (bytesPerSec >= 1024) {
       return '${(bytesPerSec / 1024).toStringAsFixed(1)} KB/s';
     }
     return '${bytesPerSec.toStringAsFixed(0)} B/s';
   }
+
+  String _formatBytesTotal(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+    } else if (bytes >= 1024 * 1024) {
+      return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+    } else if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '$bytes B';
+  }
 }
 
-// ─────────────────────────── Speed/GPS Card ──────────────────────────
-class _SpeedGpsCard extends StatelessWidget {
-  final GpsService gps;
+class _NetStatBox extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  final String sub;
+
+  const _NetStatBox({
+    required this.label,
+    required this.value,
+    required this.color,
+    required this.sub,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0A14),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF1A1A2E)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF556677),
+              fontSize: 10,
+              letterSpacing: 1.2,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            sub,
+            style: const TextStyle(color: Color(0xFF445566), fontSize: 10),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Section C: Speed & GPS ───────────────────────────────────────────────────
+
+class _SpeedSection extends StatelessWidget {
   final bool benchRunning;
-  final BenchmarkResult? lastResult;
+  final BenchmarkResult? benchResult;
   final VoidCallback onRunBenchmark;
 
-  const _SpeedGpsCard({
-    required this.gps,
+  const _SpeedSection({
     required this.benchRunning,
-    required this.lastResult,
+    required this.benchResult,
     required this.onRunBenchmark,
   });
 
   @override
   Widget build(BuildContext context) {
-    return _Card(
-      child: Column(
-        children: [
-          // Speedometer
-          Center(
-            child: SpeedometerWidget(
-              speedKmh: gps.speedKmh.clamp(0, 120),
-              maxSpeed: 120,
-              size: 260,
+    return Consumer<GpsService>(
+      builder: (_, gps, __) {
+        final data = gps.data;
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                // Speedometer
+                SpeedometerWidget(speedKmh: data.speedKmh),
+                const SizedBox(height: 16),
+                // GPS info
+                _GpsInfoRow(data: data),
+                const SizedBox(height: 16),
+                const Divider(color: Color(0xFF1A1A2E)),
+                const SizedBox(height: 12),
+                // Benchmark
+                _BenchmarkPanel(
+                  running: benchRunning,
+                  result: benchResult,
+                  onRun: onRunBenchmark,
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          // GPS info row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                gps.hasGps ? Icons.gps_fixed : Icons.gps_off,
-                color: gps.hasGps ? const Color(0xFF00FF88) : Colors.grey,
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                gps.hasGps && gps.lat != null && gps.lon != null
-                    ? '${gps.lat!.toStringAsFixed(5)}, ${gps.lon!.toStringAsFixed(5)}'
-                    : gps.hasGps
-                        ? 'Acquiring signal...'
-                        : 'No GPS signal (simulated)',
+        );
+      },
+    );
+  }
+}
+
+class _GpsInfoRow extends StatelessWidget {
+  final GpsData data;
+  const _GpsInfoRow({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          data.hasSignal ? Icons.gps_fixed_rounded : Icons.gps_off_rounded,
+          color: data.hasSignal ? const Color(0xFF00FF88) : const Color(0xFF445566),
+          size: 16,
+        ),
+        const SizedBox(width: 8),
+        if (data.hasSignal && data.latitude != null && data.longitude != null)
+          Text(
+            '${data.latitude!.toStringAsFixed(5)}, ${data.longitude!.toStringAsFixed(5)}',
+            style: const TextStyle(
+              color: Color(0xFF00FF88),
+              fontSize: 13,
+              fontFamily: 'monospace',
+            ),
+          )
+        else
+          const Text(
+            'GPS: No signal — simulated speed',
+            style: TextStyle(color: Color(0xFF445566), fontSize: 13),
+          ),
+      ],
+    );
+  }
+}
+
+class _BenchmarkPanel extends StatelessWidget {
+  final bool running;
+  final BenchmarkResult? result;
+  final VoidCallback onRun;
+
+  const _BenchmarkPanel({required this.running, this.result, required this.onRun});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'HTTP BENCHMARK',
                 style: TextStyle(
-                  color: gps.hasGps ? _textPrimary : _textSecondary,
-                  fontSize: 13,
+                  color: Color(0xFF556677),
+                  fontSize: 10,
+                  letterSpacing: 2,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          // Full benchmark button
-          if (lastResult != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                alignment: WrapAlignment.center,
-                children: [
-                  _ResultChip(label: 'RPS', value: lastResult!.rps.toStringAsFixed(1)),
-                  _ResultChip(label: 'MIN', value: '${lastResult!.minMs.toStringAsFixed(0)} ms'),
-                  _ResultChip(label: 'AVG', value: '${lastResult!.avgMs.toStringAsFixed(0)} ms'),
-                  _ResultChip(label: 'MAX', value: '${lastResult!.maxMs.toStringAsFixed(0)} ms'),
-                  _ResultChip(
-                    label: 'OK',
-                    value: '${lastResult!.successCount}/${lastResult!.totalCount}',
-                  ),
-                ],
-              ),
             ),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: benchRunning ? null : onRunBenchmark,
-              icon: benchRunning
+            ElevatedButton.icon(
+              onPressed: running ? null : onRun,
+              icon: running
                   ? const SizedBox(
-                      width: 16,
-                      height: 16,
+                      width: 14,
+                      height: 14,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(_accent),
+                        color: Colors.black,
                       ),
                     )
-                  : const Icon(Icons.speed, size: 18),
-              label: Text(benchRunning ? 'Running...' : 'Run Full Benchmark (50 req)'),
+                  : const Icon(Icons.play_arrow_rounded, size: 16),
+              label: Text(running ? 'Running…' : 'Run Benchmark'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3A5F),
-                foregroundColor: _accent,
-                disabledBackgroundColor: const Color(0xFF1E1E2E),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                backgroundColor: running ? const Color(0xFF334455) : const Color(0xFF00D4FF),
+                foregroundColor: running ? const Color(0xFF778899) : Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
               ),
             ),
+          ],
+        ),
+        if (result != null) ...[
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0A0A14),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF00D4FF).withOpacity(0.3)),
+            ),
+            child: Column(
+              children: [
+                // RPS — hero metric
+                Text(
+                  '${result!.rps.toStringAsFixed(1)} RPS',
+                  style: const TextStyle(
+                    color: Color(0xFF00D4FF),
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -1,
+                  ),
+                ),
+                const Text(
+                  'Requests per second (50 concurrent GET /apps)',
+                  style: TextStyle(color: Color(0xFF445566), fontSize: 11),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _BenchStat(
+                      label: 'SUCCESS',
+                      value: '${result!.successCount}/${result!.totalRequests}',
+                      color: result!.successCount == result!.totalRequests
+                          ? const Color(0xFF00FF88)
+                          : const Color(0xFFFFCC00),
+                    ),
+                    _BenchStat(
+                      label: 'AVG',
+                      value: '${result!.avgLatencyMs.toStringAsFixed(0)} ms',
+                      color: const Color(0xFFCCCCDD),
+                    ),
+                    _BenchStat(
+                      label: 'MIN',
+                      value: '${result!.minLatencyMs} ms',
+                      color: const Color(0xFF00FF88),
+                    ),
+                    _BenchStat(
+                      label: 'MAX',
+                      value: '${result!.maxLatencyMs} ms',
+                      color: const Color(0xFFFF6644),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ] else if (!running) ...[
+          const SizedBox(height: 12),
+          const Text(
+            'Fire 50 concurrent HTTP requests to the AGL backend and measure RPS',
+            style: TextStyle(color: Color(0xFF334455), fontSize: 11),
+            textAlign: TextAlign.center,
           ),
         ],
-      ),
+      ],
     );
   }
 }
 
-// ─────────────────────────── Shared helpers ───────────────────────────
-class _Card extends StatelessWidget {
-  final Widget child;
-  const _Card({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.07)),
-      ),
-      child: child,
-    );
-  }
-}
-
-class _CardTitle extends StatelessWidget {
-  final String text;
-  const _CardTitle({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: TextStyle(
-        color: _textSecondary,
-        fontSize: 11,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 1.5,
-      ),
-    );
-  }
-}
-
-class _NetBadge extends StatelessWidget {
+class _BenchStat extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
 
-  const _NetBadge({required this.label, required this.value, required this.color});
+  const _BenchStat({required this.label, required this.value, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF445566),
+            fontSize: 9,
+            letterSpacing: 1,
+            fontWeight: FontWeight.bold,
           ),
-          const SizedBox(width: 4),
-          Text(
-            value,
-            style: TextStyle(color: _textPrimary, fontSize: 11),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ResultChip extends StatelessWidget {
-  final String label;
-  final String value;
-
-  const _ResultChip({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: _accent.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _accent.withOpacity(0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '$label: ',
-            style: TextStyle(color: _textSecondary, fontSize: 11),
-          ),
-          Text(
-            value,
-            style: const TextStyle(
-              color: _accent,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
