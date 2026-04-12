@@ -3,16 +3,36 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../models/app_source.dart';
 import '../models/flatpak_package.dart';
 import 'flatpak_cache.dart';
 import '../platform/flatpak_platform.dart';
 
-const _baseUrl = 'https://flathub.org/api/v2';
+/// Page size used for the initial sync of catalog endpoints.
+const _refreshPageSize = 100;
 
 class FlatpakRepository {
   final FlatpakCache _cache = FlatpakCache();
 
+  /// Currently active catalog source. Defaults to PensHub (the AGL Store).
+  /// Switch via [setSource]; never mutate directly.
+  AppSource _source = AppSource.pensHub;
+  AppSource get currentSource => _source;
+
   Future<void> init() => _cache.init();
+
+  /// Switch the active catalog. Wipes the local cache so PensHub and Flathub
+  /// data never bleed into each other (they may publish the same flatpak id
+  /// with different metadata).
+  Future<void> setSource(AppSource source) async {
+    if (_source == source) return;
+    _source = source;
+    await _cache.clear();
+  }
+
+  // Pre-compiled static RegExp — avoid re-creation per call
+  static final _partRe = RegExp(r'^[A-Za-z0-9_]+$');
+  static final _lastPartRe = RegExp(r'^[A-Za-z0-9_-]+$');
 
   // -----------------------------
   // Helpers
@@ -22,8 +42,7 @@ class FlatpakRepository {
     final parts = id.split('.');
     for (int i = 0; i < parts.length; i++) {
       final isLast = i == parts.length - 1;
-      final re = RegExp(isLast ? r'^[A-Za-z0-9_-]+$' : r'^[A-Za-z0-9_]+$');
-      if (!re.hasMatch(parts[i])) return false;
+      if (!(isLast ? _lastPartRe : _partRe).hasMatch(parts[i])) return false;
     }
     return true;
   }
@@ -47,55 +66,69 @@ class FlatpakRepository {
     return raw;
   }
 
-  static List<FlatpakPackage> _parseCategoryResponseSafe(String body) {
-    final decoded = json.decode(body);
-
-    List<dynamic> hits = [];
-    if (decoded is Map<String, dynamic> && decoded.containsKey('hits')) {
-      hits = decoded['hits'];
-    } else if (decoded is List) {
-      hits = decoded;
+  /// Extracts a list of app objects from a PensHub response.
+  ///
+  /// PensHub usually returns a bare JSON array, but the parser also tolerates
+  /// `{ "apps": [...] }` / `{ "data": [...] }` / `{ "hits": [...] }` wrappers
+  /// in case the API ever changes shape.
+  static List<Map<String, dynamic>> _extractItems(dynamic decoded) {
+    if (decoded is List) {
+      return decoded.whereType<Map<String, dynamic>>().toList();
     }
-
-    return hits
-        .whereType<Map<String, dynamic>>()
-        .map(FlatpakPackage.fromAppstream)
-        // 🔒 CRITICAL: drop invalid entries
-        .where((p) => p.flatpakId.isNotEmpty)
-        .toList();
+    if (decoded is Map<String, dynamic>) {
+      for (final key in const ['apps', 'data', 'hits', 'results']) {
+        final v = decoded[key];
+        if (v is List) {
+          return v.whereType<Map<String, dynamic>>().toList();
+        }
+      }
+    }
+    return const [];
   }
 
   // -----------------------------
   // Parsing (Isolate-safe)
   // -----------------------------
-  static List<FlatpakPackage> _parseAppList(String body) {
+
+  /// PensHub `/apps` returns full objects in [_extractItems]-friendly form.
+  static List<FlatpakPackage> _parsePensHubList(String body) {
     final decoded = json.decode(body);
-    if (decoded is! List) return [];
-
-    // Case 1: List<String> → flatpak IDs only
-    if (decoded.isNotEmpty && decoded.first is String) {
-      return decoded.cast<String>().map((id) {
-        return FlatpakPackage(
-          id: id, // internal id
-          flatpakId: id, // canonical flatpak id
-          name: id, // temporary, will be enriched later
-        );
-      }).toList();
-    }
-
-    // Case 2: Full AppStream objects
-    if (decoded.first is Map<String, dynamic>) {
-      return decoded
-          .cast<Map<String, dynamic>>()
-          .map(FlatpakPackage.fromAppstream)
-          .where((p) => p.flatpakId.isNotEmpty)
-          .toList();
-    }
-
-    return [];
+    return _extractItems(decoded)
+        .map(FlatpakPackage.fromPensHubJson)
+        .where((p) => p.flatpakId.isNotEmpty)
+        .toList();
   }
 
-  static FlatpakPackage? _parseSingleApp(String body) {
+  static FlatpakPackage? _parsePensHubSingle(String body) {
+    final decoded = json.decode(body);
+    if (decoded is! Map<String, dynamic>) return null;
+    final pkg = FlatpakPackage.fromPensHubJson(decoded);
+    return pkg.flatpakId.isNotEmpty ? pkg : null;
+  }
+
+  /// Flathub `/appstream?filter=apps` returns a JSON array of flatpak ids.
+  /// We hydrate them into stub packages and let [enrichMissingDetails] fetch
+  /// the rest one at a time from `/appstream/{id}`.
+  static List<FlatpakPackage> _parseFlathubIdList(String body) {
+    final decoded = json.decode(body);
+    if (decoded is! List) return [];
+    return decoded
+        .whereType<String>()
+        .map((id) => FlatpakPackage(id: id, flatpakId: id, name: id))
+        .toList();
+  }
+
+  /// Flathub `/collection/category/{name}` returns either a `{hits: [...] }`
+  /// envelope or a bare list of AppStream-shaped objects.
+  static List<FlatpakPackage> _parseFlathubCategory(String body) {
+    final decoded = json.decode(body);
+    return _extractItems(decoded)
+        .map(FlatpakPackage.fromAppstream)
+        .where((p) => p.flatpakId.isNotEmpty)
+        .toList();
+  }
+
+  static FlatpakPackage? _parseFlathubSingle(String body) {
     final decoded = json.decode(body);
     if (decoded is! Map<String, dynamic>) return null;
     final pkg = FlatpakPackage.fromAppstream(decoded);
@@ -105,14 +138,43 @@ class FlatpakRepository {
   // -----------------------------
   // Sync / Refresh
   // -----------------------------
+  /// Pulls the catalog list for the active source.
+  ///
+  /// PensHub returns rich objects directly. Flathub's `/appstream` returns
+  /// just a list of ids; details get hydrated later by [enrichMissingDetails].
   Future<void> refreshAllApps() async {
     try {
-      final uri = Uri.parse('$_baseUrl/appstream?filter=apps');
-      final resp = await http.get(uri);
+      final base = _source.apiBaseUrl;
 
+      if (_source == AppSource.pensHub) {
+        final uri = Uri.parse('$base/apps').replace(
+          queryParameters: {
+            'limit': '$_refreshPageSize',
+            'offset': '0',
+          },
+        );
+        final resp = await http.get(uri, headers: const {
+          'Accept': 'application/json',
+        });
+        if (resp.statusCode == 200) {
+          final apps = await compute(_parsePensHubList, resp.body);
+          await _cache.upsertAll(apps);
+        } else {
+          debugPrint('PensHub /apps failed: ${resp.statusCode}');
+        }
+        return;
+      }
+
+      // Flathub
+      final uri = Uri.parse('$base/appstream?filter=apps');
+      final resp = await http.get(uri, headers: const {
+        'Accept': 'application/json',
+      });
       if (resp.statusCode == 200) {
-        final apps = await compute(_parseAppList, resp.body);
+        final apps = await compute(_parseFlathubIdList, resp.body);
         await _cache.upsertAll(apps);
+      } else {
+        debugPrint('Flathub /appstream failed: ${resp.statusCode}');
       }
     } catch (e) {
       debugPrint('Background refresh failed: $e');
@@ -122,17 +184,38 @@ class FlatpakRepository {
   // -----------------------------
   // Details
   // -----------------------------
-  Future<FlatpakPackage?> fetchDetailsByFlatpakId(String flatpakId) async {
+  /// Fetches a single app's full metadata.
+  ///
+  /// When [forceRefresh] is false (default), a cached entry that already has
+  /// a summary is returned without hitting the network. The detail page sets
+  /// [forceRefresh] to true so it always shows up-to-date description,
+  /// screenshots and metadata even if the cache is stale or partial.
+  Future<FlatpakPackage?> fetchDetailsByFlatpakId(
+    String flatpakId, {
+    bool forceRefresh = false,
+  }) async {
     if (!_looksLikeFlatpakId(flatpakId)) return null;
 
-    final cached = await _cache.getByFlatpakId(flatpakId);
-    if (cached != null) return cached;
+    if (!forceRefresh) {
+      final cached = await _cache.getByFlatpakId(flatpakId);
+      if (cached != null && (cached.summary?.isNotEmpty ?? false)) {
+        return cached;
+      }
+    }
+
+    final base = _source.apiBaseUrl;
+    final uri = _source == AppSource.pensHub
+        ? Uri.parse('$base/apps/$flatpakId')
+        : Uri.parse('$base/appstream/$flatpakId');
 
     try {
-      final uri = Uri.parse('$_baseUrl/appstream/$flatpakId');
-      final resp = await http.get(uri);
+      final resp = await http.get(uri, headers: const {
+        'Accept': 'application/json',
+      });
       if (resp.statusCode == 200) {
-        final pkg = await compute(_parseSingleApp, resp.body);
+        final pkg = _source == AppSource.pensHub
+            ? await compute(_parsePensHubSingle, resp.body)
+            : await compute(_parseFlathubSingle, resp.body);
         if (pkg != null) {
           await _cache.upsertAll([pkg]);
           return pkg;
@@ -218,34 +301,33 @@ class FlatpakRepository {
   }
 
   Stream<List<FlatpakPackage>> fetchByCategory(String categoryName) async* {
-    // 0. Emit cached data first (if any)
-    final cached = await _cache.page(offset: 0, limit: 200, query: null);
-
-    final cachedFiltered = cached.where((p) => p.flatpakId.isNotEmpty).toList();
-
-    if (cachedFiltered.isNotEmpty) {
-      yield cachedFiltered;
-    }
-
-    // 1. Fetch from network
-    final uri = Uri.parse('$_baseUrl/collection/category/$categoryName');
+    final base = _source.apiBaseUrl;
+    final uri = _source == AppSource.pensHub
+        ? Uri.parse('$base/apps').replace(queryParameters: {
+            'category': categoryName,
+            'limit': '$_refreshPageSize',
+          })
+        : Uri.parse('$base/collection/category/$categoryName');
 
     try {
-      final resp = await http.get(uri);
+      final resp = await http.get(uri, headers: const {
+        'Accept': 'application/json',
+      });
       if (resp.statusCode != 200) {
         debugPrint('Category fetch failed [$categoryName]: ${resp.statusCode}');
         return;
       }
 
-      // 2. Parse in isolate
-      final apps = await compute(_parseCategoryResponseSafe, resp.body);
+      final apps = _source == AppSource.pensHub
+          ? await compute(_parsePensHubList, resp.body)
+          : await compute(_parseFlathubCategory, resp.body);
 
-      if (apps.isEmpty) return;
+      if (apps.isEmpty) {
+        yield const [];
+        return;
+      }
 
-      // 3. Save to DB (keyed by flatpakId)
       await _cache.upsertAll(apps);
-
-      // 4. Emit fresh data
       yield apps;
     } catch (e) {
       debugPrint('Exception fetching category $categoryName: $e');
@@ -276,6 +358,10 @@ class FlatpakRepository {
             version: p.version,
             license: p.license,
             downloadSize: p.downloadSize,
+            screenshots: p.screenshots,
+            homepage: p.homepage,
+            bugtracker: p.bugtracker,
+            categories: p.categories,
           ),
         );
       }
@@ -301,7 +387,7 @@ class FlatpakRepository {
       return Future.value(); // ⛔ NO CRASH
     }
 
-    return FlatpakPlatform.install(fixed);
+    return FlatpakPlatform.install(fixed, remote: _source.flatpakRemote);
   }
 
   Future<void> uninstall(String flatpakId) {

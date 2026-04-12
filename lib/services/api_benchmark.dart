@@ -87,7 +87,7 @@ class ApiBenchmark {
     final minMs = successful.first;
     final maxMs = successful.last;
     final avgMs = successful.reduce((a, b) => a + b) / successful.length;
-    final rps = totalSeconds > 0 ? successful.length / totalSeconds : 0;
+    final rps = totalSeconds > 0 ? successful.length / totalSeconds : 0.0;
 
     return BenchmarkResult(
       rps: rps,

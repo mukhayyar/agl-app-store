@@ -15,33 +15,30 @@ class FlatpakCache {
   late Database _db;
   final _store = stringMapStoreFactory.store('apps');
 
+  // Pre-compiled static RegExp
+  static final _partRe = RegExp(r'^[A-Za-z0-9_]+$');
+  static final _lastPartRe = RegExp(r'^[A-Za-z0-9_-]+$');
+
   static bool _looksLikeFlatpakId(String id) {
     if (!id.contains('.')) return false;
     final parts = id.split('.');
     for (int i = 0; i < parts.length; i++) {
       final isLast = i == parts.length - 1;
-      final re = RegExp(isLast ? r'^[A-Za-z0-9_-]+$' : r'^[A-Za-z0-9_]+$');
-      if (!re.hasMatch(parts[i])) return false;
+      if (!(isLast ? _lastPartRe : _partRe).hasMatch(parts[i])) return false;
     }
     return true;
   }
 
   static String normalizeFlatpakId(String raw) {
     if (raw.isEmpty) return raw;
-
-    // If it already looks valid, return as-is
     if (_looksLikeFlatpakId(raw)) return raw;
 
-    // 🔥 HACK: convert underscores to dots
     final normalized = raw.replaceAll('_', '.');
-
-    // If the normalized version is valid, use it
     if (_looksLikeFlatpakId(normalized)) {
       debugPrint('Flatpak ID normalized: "$raw" → "$normalized"');
       return normalized;
     }
 
-    // Last resort: return original (will be rejected later)
     return raw;
   }
 
@@ -56,6 +53,13 @@ class FlatpakCache {
   // -----------------------------
   // Write
   // -----------------------------
+  /// Wipes every cached app. Called when the user switches between PensHub
+  /// and Flathub so the two sources never bleed into each other (they may
+  /// publish the same flatpak id with different metadata).
+  Future<void> clear() async {
+    await _store.delete(_db);
+  }
+
   Future<void> upsertAll(List<FlatpakPackage> apps) async {
     await _db.transaction((txn) async {
       for (final a in apps) {
@@ -76,15 +80,7 @@ class FlatpakCache {
   }
 
   Future<int> count({String? query}) async {
-    Filter? filter;
-    if (query != null && query.isNotEmpty) {
-      final re = RegExp(RegExp.escape(query), caseSensitive: false);
-      filter = Filter.or([
-        Filter.matchesRegExp('name', re),
-        Filter.matchesRegExp('id', re),
-        Filter.matchesRegExp('flatpak_id', re),
-      ]);
-    }
+    final filter = _buildQueryFilter(query);
     return _store.count(_db, filter: filter);
   }
 
@@ -93,15 +89,7 @@ class FlatpakCache {
     required int limit,
     String? query,
   }) async {
-    Filter? filter;
-    if (query != null && query.isNotEmpty) {
-      final re = RegExp(RegExp.escape(query), caseSensitive: false);
-      filter = Filter.or([
-        Filter.matchesRegExp('name', re),
-        Filter.matchesRegExp('id', re),
-        Filter.matchesRegExp('flatpak_id', re),
-      ]);
-    }
+    final filter = _buildQueryFilter(query);
 
     final finder = Finder(
       filter: filter,
@@ -112,5 +100,16 @@ class FlatpakCache {
 
     final records = await _store.find(_db, finder: finder);
     return records.map((r) => FlatpakPackage.fromMap(r.value)).toList();
+  }
+
+  /// Build a reusable filter for query — avoids duplicated RegExp creation
+  Filter? _buildQueryFilter(String? query) {
+    if (query == null || query.isEmpty) return null;
+    final re = RegExp(RegExp.escape(query), caseSensitive: false);
+    return Filter.or([
+      Filter.matchesRegExp('name', re),
+      Filter.matchesRegExp('id', re),
+      Filter.matchesRegExp('flatpak_id', re),
+    ]);
   }
 }

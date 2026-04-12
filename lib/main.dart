@@ -1,16 +1,12 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:math';
-
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:provider/provider.dart';
 
 import 'bloc/flatpak_bloc.dart';
 import 'data/flatpak_repository.dart';
+import 'models/app_source.dart';
 import 'models/flatpak_package.dart';
-import 'platform/flatpak_platform.dart';
 import 'pages/category_page.dart';
 import 'pages/app_detail_page.dart';
 import 'pages/installed_apps_page.dart';
@@ -19,6 +15,9 @@ import 'pages/monitor_page.dart';
 import 'services/system_monitor.dart';
 import 'services/gps_service.dart';
 import 'services/api_benchmark.dart';
+import 'theme/app_colors.dart';
+import 'theme/app_spacing.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   runApp(const FlatpakApp());
@@ -44,22 +43,7 @@ class FlatpakApp extends StatelessWidget {
           child: MaterialApp(
             title: 'AGL App Store',
             debugShowCheckedModeBanner: false,
-            theme: ThemeData(
-              scaffoldBackgroundColor: Colors.white,
-              primaryColor: Colors.black,
-              colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
-              appBarTheme: const AppBarTheme(
-                backgroundColor: Colors.white,
-                elevation: 0,
-                iconTheme: IconThemeData(color: Colors.black),
-                titleTextStyle: TextStyle(
-                  color: Colors.black,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              fontFamily: 'sans-serif',
-            ),
+            theme: AppTheme.light(),
             home: const FlatpakHomePage(),
           ),
         ),
@@ -83,18 +67,20 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
   @override
   void initState() {
     super.initState();
-    _scrollCtl.addListener(() {
-      if (!mounted) return;
-      final bloc = context.read<FlatpakBloc>();
-      if (_scrollCtl.position.pixels >=
-          _scrollCtl.position.maxScrollExtent - 400) {
-        bloc.add(const LoadNextPage());
-      }
-    });
+    _scrollCtl.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (!mounted) return;
+    if (_scrollCtl.position.pixels >=
+        _scrollCtl.position.maxScrollExtent - 400) {
+      context.read<FlatpakBloc>().add(const LoadNextPage());
+    }
   }
 
   @override
   void dispose() {
+    _scrollCtl.removeListener(_onScroll);
     _scrollCtl.dispose();
     _searchCtl.dispose();
     super.dispose();
@@ -105,423 +91,549 @@ class _FlatpakHomePageState extends State<FlatpakHomePage> {
     final bloc = context.read<FlatpakBloc>();
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
+        toolbarHeight: 72,
         title: Row(
-          children: const [
-            Icon(Icons.apps, color: Colors.black),
-            SizedBox(width: 10),
-            Text('AGL App Store'),
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [AppColors.brand, AppColors.accentViolet],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.brand.withValues(alpha: 0.25),
+                    blurRadius: 14,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.apps_rounded,
+                color: Colors.white,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'AGL App Store',
+                    style: Theme.of(context).textTheme.titleLarge,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    'Discover & install Linux apps',
+                    style: Theme.of(context).textTheme.bodySmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
         actions: [
           if (_selectedIndex == 0)
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: Colors.grey[200],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: IconButton(
-                icon: const Icon(Icons.search, color: Colors.black54),
-                onPressed: () {
-                  showDialog(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text("Search"),
-                      content: TextField(
-                        controller: _searchCtl,
-                        autofocus: true,
-                        decoration: const InputDecoration(
-                          hintText: "App Name...",
-                        ),
-                        onSubmitted: (q) {
-                          bloc.add(
-                            LoadFirstPage(query: q.trim().isEmpty ? null : q),
-                          );
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                    ),
-                  );
-                },
-              ),
+            _CircleIconButton(
+              icon: Icons.search_rounded,
+              onTap: () => _showSearch(context, bloc),
             ),
-          const Padding(
-            padding: EdgeInsets.only(right: 16.0),
-            child: CircleAvatar(
-              backgroundImage: NetworkImage('https://i.pravatar.cc/150?img=5'),
+          const SizedBox(width: AppSpacing.sm),
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.lg),
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: AppColors.borderSubtle, width: 2),
+              ),
+              child: const CircleAvatar(
+                radius: 18,
+                backgroundImage: NetworkImage(
+                  'https://i.pravatar.cc/150?img=5',
+                ),
+              ),
             ),
           ),
         ],
+        bottom: _selectedIndex == 0
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(64),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.pageGutter,
+                    0,
+                    AppSpacing.pageGutter,
+                    AppSpacing.md,
+                  ),
+                  child: BlocBuilder<FlatpakBloc, FlatpakState>(
+                    buildWhen: (prev, curr) {
+                      final pSrc =
+                          prev is FlatpakLoaded ? prev.source : null;
+                      final cSrc =
+                          curr is FlatpakLoaded ? curr.source : null;
+                      return pSrc != cSrc;
+                    },
+                    builder: (context, state) {
+                      final current = state is FlatpakLoaded
+                          ? state.source
+                          : AppSource.pensHub;
+                      return _SourceToggle(
+                        current: current,
+                        onChanged: (s) =>
+                            context.read<FlatpakBloc>().add(SwitchSource(s)),
+                      );
+                    },
+                  ),
+                ),
+              )
+            : null,
       ),
-      body: _selectedIndex == 1
-          ? const CategoriesPage()
-          : _selectedIndex == 2
-          ? const InstalledAppsPage()
-          : _selectedIndex == 3
-          ? const SettingsPage()
-          : _selectedIndex == 4
-          ? const MonitorPage()
-          : BlocConsumer<FlatpakBloc, FlatpakState>(
-              listener: (context, state) {
-                if (state is FlatpakError) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text(state.message)));
-                }
-              },
-              builder: (context, state) {
-                if (state is FlatpakLoading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (state is FlatpakError) {
-                  return Center(
-                    child: TextButton(
-                      onPressed: () => bloc.add(const RefreshAll()),
-                      child: const Text("Error. Tap to Retry"),
-                    ),
+      body: _buildBody(bloc),
+      bottomNavigationBar: _buildBottomNav(bloc),
+    );
+  }
+
+  void _showSearch(BuildContext context, FlatpakBloc bloc) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xxl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Search apps',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              TextField(
+                controller: _searchCtl,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'App name…',
+                  prefixIcon: Icon(Icons.search_rounded),
+                ),
+                onSubmitted: (q) {
+                  bloc.add(
+                    LoadFirstPage(query: q.trim().isEmpty ? null : q),
                   );
-                }
+                  Navigator.pop(ctx);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-                if (state is FlatpakLoaded) {
-                  final items = state.items;
-                  if (items.isEmpty) {
-                    return const Center(child: Text("No apps found"));
-                  }
+  Widget _buildBottomNav(FlatpakBloc bloc) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: const Border(
+          top: BorderSide(color: AppColors.borderSubtle),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: BottomNavigationBar(
+          currentIndex: _selectedIndex,
+          onTap: (index) {
+            final wasHome = _selectedIndex == 0;
+            setState(() => _selectedIndex = index);
+            if (index == 0 && wasHome) {
+              bloc.add(const RefreshAll());
+            }
+          },
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_outlined),
+              activeIcon: Icon(Icons.home_rounded),
+              label: 'Home',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.grid_view_outlined),
+              activeIcon: Icon(Icons.grid_view_rounded),
+              label: 'Categories',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.download_done_outlined),
+              activeIcon: Icon(Icons.download_done_rounded),
+              label: 'Installed',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.settings_outlined),
+              activeIcon: Icon(Icons.settings_rounded),
+              label: 'Settings',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.monitor_heart_outlined),
+              activeIcon: Icon(Icons.monitor_heart_rounded),
+              label: 'Monitor',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-                  final featuredItems = items.take(3).toList();
-                  final listItems = items.skip(3).toList();
+  Widget _buildBody(FlatpakBloc bloc) {
+    switch (_selectedIndex) {
+      case 1:
+        return const CategoriesPage();
+      case 2:
+        return const InstalledAppsPage();
+      case 3:
+        return const SettingsPage();
+      case 4:
+        return const MonitorPage();
+      default:
+        return BlocConsumer<FlatpakBloc, FlatpakState>(
+          buildWhen: (prev, curr) {
+            if (prev.runtimeType != curr.runtimeType) return true;
+            if (prev is FlatpakLoaded && curr is FlatpakLoaded) {
+              return prev.items != curr.items ||
+                  prev.hasMore != curr.hasMore ||
+                  prev.installed != curr.installed ||
+                  prev.installingIds != curr.installingIds;
+            }
+            return true;
+          },
+          listenWhen: (prev, curr) => curr is FlatpakError,
+          listener: (context, state) {
+            if (state is FlatpakError) {
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text(state.message)));
+            }
+          },
+          builder: (context, state) {
+            if (state is FlatpakLoading) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (state is FlatpakError) {
+              return Center(
+                child: TextButton.icon(
+                  onPressed: () => bloc.add(const RefreshAll()),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Tap to retry'),
+                ),
+              );
+            }
 
-                  return CustomScrollView(
-                    controller: _scrollCtl,
-                    slivers: [
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  children: featuredItems.map((pkg) {
-                                    return GestureDetector(
-                                      onTap: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                AppDetailPage(package: pkg),
-                                          ),
-                                        );
-                                      },
-                                      child: FeaturedCard(
-                                        package: pkg,
-                                        color: _getColorFromId(pkg.id),
+            if (state is FlatpakLoaded) {
+              final items = state.items;
+              if (items.isEmpty) {
+                return const _EmptyState(
+                  icon: Icons.apps_rounded,
+                  title: 'No apps found',
+                  subtitle: 'Try a different search or pull to refresh.',
+                );
+              }
+
+              final featuredItems = items.take(3).toList();
+              final listItems = items.skip(3).toList();
+
+              return CustomScrollView(
+                controller: _scrollCtl,
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.pageGutter,
+                        AppSpacing.lg,
+                        AppSpacing.pageGutter,
+                        AppSpacing.md,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _SectionHeader(
+                            title: 'Featured',
+                            subtitle: 'Editor picks for this week',
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          SizedBox(
+                            height: 240,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              physics: const BouncingScrollPhysics(),
+                              padding: EdgeInsets.zero,
+                              itemCount: featuredItems.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(width: AppSpacing.lg),
+                              itemBuilder: (context, i) {
+                                final pkg = featuredItems[i];
+                                return GestureDetector(
+                                  key: ValueKey('featured_${pkg.id}'),
+                                  onTap: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            AppDetailPage(package: pkg),
                                       ),
                                     );
-                                  }).toList(),
-                                ),
-                              ),
-                              const SizedBox(height: 30),
-                              const Text(
-                                "All Apps",
-                                style: TextStyle(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                            ],
+                                  },
+                                  child: FeaturedCard(package: pkg),
+                                );
+                              },
+                            ),
                           ),
-                        ),
+                          const SizedBox(height: AppSpacing.xxxl),
+                          _SectionHeader(
+                            title: 'All apps',
+                            subtitle: '${items.length}+ available',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                        ],
                       ),
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            if (index >= listItems.length) {
-                              return state.hasMore
-                                  ? const Center(
-                                      child: Padding(
-                                        padding: EdgeInsets.all(16.0),
-                                        child: CircularProgressIndicator(),
-                                      ),
-                                    )
-                                  : const SizedBox(height: 50);
-                            }
-                            final pkg = listItems[index];
-                            final installed = state.installed.contains(
-                              pkg.flatpakId,
-                            );
-                            // Check if this specific app is installing
-                            final isInstalling = state.installingIds.contains(
-                              pkg.id,
-                            );
+                    ),
+                  ),
+                  SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        if (index >= listItems.length) {
+                          return state.hasMore
+                              ? const Padding(
+                                  padding: EdgeInsets.all(AppSpacing.xxl),
+                                  child: Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                )
+                              : const SizedBox(height: AppSpacing.huge);
+                        }
+                        final pkg = listItems[index];
+                        final installed =
+                            state.installed.contains(pkg.flatpakId);
+                        final isInstalling =
+                            state.installingIds.contains(pkg.id);
 
-                            return GestureDetector(
-                              behavior: HitTestBehavior.opaque,
+                        return RepaintBoundary(
+                          key: ValueKey(pkg.id),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(
+                              AppSpacing.pageGutter,
+                              AppSpacing.sm,
+                              AppSpacing.pageGutter,
+                              AppSpacing.sm,
+                            ),
+                            child: AppListItem(
+                              package: pkg,
+                              isInstalled: installed,
+                              isInstalling: isInstalling,
                               onTap: () {
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (_) => AppDetailPage(package: pkg),
+                                    builder: (_) =>
+                                        AppDetailPage(package: pkg),
                                   ),
                                 );
                               },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 10,
-                                ),
-                                child: AppListItem(
-                                  package: pkg,
-                                  isInstalled: installed,
-                                  isInstalling: isInstalling, // Pass state
-                                  cardColor: _getColorFromId(pkg.id),
-                                  onInstall: () {
-                                    if (!installed && !isInstalling) {
-                                      // No blocking modal. Just dispatch event.
-                                      bloc.add(InstallApp(pkg.flatpakId));
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            "Downloading ${pkg.name}...",
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  },
-                                  onUninstall: () =>
-                                      bloc.add(UninstallApp(pkg.flatpakId)),
-                                ),
-                              ),
-                            );
-                          },
-                          childCount:
-                              listItems.length + (state.hasMore ? 1 : 0),
-                        ),
-                      ),
-                    ],
-                  );
-                }
-                return const SizedBox.shrink();
-              },
-            ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (index) {
-          setState(() => _selectedIndex = index);
-          if (index == 0 && _selectedIndex == 0) {
-            bloc.add(const RefreshAll());
-          }
-        },
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: Colors.black,
-        unselectedItemColor: Colors.grey,
-        showUnselectedLabels: true,
-        backgroundColor: Colors.white,
-        elevation: 10,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-          BottomNavigationBarItem(icon: Icon(Icons.list), label: "Categories"),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.branding_watermark),
-            label: "Installed",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings_outlined),
-            label: "Settings",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.monitor_heart),
-            label: "Monitor",
-          ),
-        ],
-      ),
-    );
-  }
-
-  Color _getColorFromId(String id) {
-    final int hash = id.codeUnits.fold(0, (prev, element) => prev + element);
-    final Random rng = Random(hash);
-    return Color.fromARGB(
-      255,
-      50 + rng.nextInt(100),
-      50 + rng.nextInt(100),
-      50 + rng.nextInt(100),
-    );
+                              onInstall: () {
+                                if (!installed && !isInstalling) {
+                                  bloc.add(InstallApp(pkg.flatpakId));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content:
+                                          Text('Downloading ${pkg.name}…'),
+                                    ),
+                                  );
+                                }
+                              },
+                              onUninstall: () =>
+                                  bloc.add(UninstallApp(pkg.flatpakId)),
+                            ),
+                          ),
+                        );
+                      },
+                      childCount: listItems.length + (state.hasMore ? 1 : 0),
+                      addAutomaticKeepAlives: false,
+                      addRepaintBoundaries: false,
+                    ),
+                  ),
+                ],
+              );
+            }
+            return const SizedBox.shrink();
+          },
+        );
+    }
   }
 }
 
-class FeaturedCard extends StatelessWidget {
-  final FlatpakPackage package;
-  final Color color;
+// =====================================================================
+// SHARED WIDGETS
+// =====================================================================
 
-  const FeaturedCard({super.key, required this.package, required this.color});
+/// Pill segmented control that switches the catalog source between
+/// PensHub (cyan) and Flathub (orange). The selected pill animates the
+/// indicator and tints icon + label with the source's accent color.
+class _SourceToggle extends StatelessWidget {
+  final AppSource current;
+  final ValueChanged<AppSource> onChanged;
+  const _SourceToggle({required this.current, required this.onChanged});
+
+  static const _pensHubAccent = Color(0xFF00D4FF);
+  static const _flathubAccent = Color(0xFFFF6B35);
+
+  Color _accentFor(AppSource s) =>
+      s == AppSource.pensHub ? _pensHubAccent : _flathubAccent;
+
+  IconData _iconFor(AppSource s) => s == AppSource.pensHub
+      ? Icons.storefront_rounded
+      : Icons.public_rounded;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 280,
-      margin: const EdgeInsets.only(right: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      height: 48,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceMuted,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusFull),
+        border: Border.all(color: AppColors.borderSubtle),
+      ),
+      child: Row(
         children: [
-          Container(
-            height: 160,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(16),
+          for (final s in AppSource.values)
+            Expanded(
+              child: _SourceToggleTab(
+                source: s,
+                icon: _iconFor(s),
+                accent: _accentFor(s),
+                selected: current == s,
+                onTap: () => onChanged(s),
+              ),
             ),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: Opacity(
-                    opacity: 0.2,
-                    child: Image.network(
-                      "https://images.unsplash.com/photo-1552086971-da0cb107297e?auto=format&fit=crop&q=80&w=300",
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const SizedBox(),
-                    ),
-                  ),
-                ),
-                Center(child: _AppIcon(url: package.icon, size: 60)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            package.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            package.summary ?? "No description available",
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: Colors.blueGrey[400], fontSize: 14),
-          ),
         ],
       ),
     );
   }
 }
 
-class AppListItem extends StatelessWidget {
-  final FlatpakPackage package;
-  final bool isInstalled;
-  final bool isInstalling; // NEW: Receive installing state
-  final Color cardColor;
-  final VoidCallback onInstall;
-  final VoidCallback onUninstall;
-
-  const AppListItem({
-    super.key,
-    required this.package,
-    required this.isInstalled,
-    required this.isInstalling,
-    required this.cardColor,
-    required this.onInstall,
-    required this.onUninstall,
+class _SourceToggleTab extends StatelessWidget {
+  final AppSource source;
+  final IconData icon;
+  final Color accent;
+  final bool selected;
+  final VoidCallback onTap;
+  const _SourceToggleTab({
+    required this.source,
+    required this.icon,
+    required this.accent,
+    required this.selected,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          flex: 4,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      decoration: BoxDecoration(
+        color: selected ? AppColors.surface : Colors.transparent,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusFull),
+        boxShadow: selected
+            ? [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.20),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : null,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusFull),
+          onTap: onTap,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                package.name,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
+              Icon(
+                icon,
+                size: 18,
+                color: selected ? accent : AppColors.textTertiary,
               ),
-              const SizedBox(height: 8),
-              Text(
-                package.summary ?? "",
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: Colors.blueGrey[400], fontSize: 14),
-              ),
-              const SizedBox(height: 16),
-              if (isInstalling)
-                // SHOW SPINNER
-                ElevatedButton.icon(
-                  onPressed: null,
-                  icon: const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  label: const Text('Installing...'),
-                )
-              else if (isInstalled)
-                Row(
-                  children: [
-                    const Text(
-                      "Installed",
-                      style: TextStyle(
-                        color: Colors.green,
-                        fontWeight: FontWeight.bold,
+              const SizedBox(width: AppSpacing.sm),
+              Flexible(
+                child: Text(
+                  source.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: selected ? accent : AppColors.textTertiary,
+                        fontWeight: FontWeight.w700,
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    IconButton(
-                      onPressed: onUninstall,
-                      icon: const Icon(Icons.delete, color: Colors.red),
-                      tooltip: "Uninstall",
-                    ),
-                  ],
-                )
-              else
-                ElevatedButton(
-                  onPressed: onInstall,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.grey[200],
-                    foregroundColor: Colors.black,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
-                    ),
-                  ),
-                  child: const Text("Install"),
                 ),
+              ),
             ],
           ),
         ),
-        const SizedBox(width: 20),
+      ),
+    );
+  }
+}
+
+class _CircleIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _CircleIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surfaceMuted,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Icon(icon, size: 20, color: AppColors.textPrimary),
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  // ignore: unused_element_parameter
+  const _SectionHeader({required this.title, this.subtitle});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
         Expanded(
-          flex: 5,
-          child: Container(
-            height: 150,
-            decoration: BoxDecoration(
-              color: cardColor,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: _AppIcon(url: package.icon, size: 50),
-              ),
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.headlineMedium),
+              if (subtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ],
           ),
         ),
       ],
@@ -529,22 +641,400 @@ class AppListItem extends StatelessWidget {
   }
 }
 
-class _AppIcon extends StatelessWidget {
-  final String? url;
-  final double size;
-  const _AppIcon({required this.url, required this.size});
+class _EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _EmptyState({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
   @override
   Widget build(BuildContext context) {
-    if (url == null) {
-      return Icon(Icons.apps, size: size, color: Colors.white);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              decoration: BoxDecoration(
+                color: AppColors.brandSoft,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 36, color: AppColors.brand),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Text(title, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// FEATURED CARD
+// =====================================================================
+class FeaturedCard extends StatelessWidget {
+  final FlatpakPackage package;
+
+  const FeaturedCard({super.key, required this.package});
+
+  @override
+  Widget build(BuildContext context) {
+    final gradient = AppColors.gradientFor(package.id);
+
+    return Container(
+      width: 300,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
+        gradient: LinearGradient(
+          colors: gradient,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: gradient.last.withValues(alpha: 0.30),
+            blurRadius: 22,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // decorative ring
+          Positioned(
+            top: -40,
+            right: -40,
+            child: Container(
+              width: 160,
+              height: 160,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.10),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -30,
+            left: -20,
+            child: Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.xl),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.20),
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusFull),
+                  ),
+                  child: const Text(
+                    'FEATURED',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+                  ),
+                  child: AppIcon(url: package.icon, size: 56),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      package.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      package.summary ?? 'No description available',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.85),
+                        fontSize: 13,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =====================================================================
+// APP LIST ITEM (horizontal card)
+// =====================================================================
+class AppListItem extends StatelessWidget {
+  final FlatpakPackage package;
+  final bool isInstalled;
+  final bool isInstalling;
+  final VoidCallback onInstall;
+  final VoidCallback onUninstall;
+  final VoidCallback onTap;
+
+  const AppListItem({
+    super.key,
+    required this.package,
+    required this.isInstalled,
+    required this.isInstalling,
+    required this.onInstall,
+    required this.onUninstall,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final gradient = AppColors.gradientFor(package.id);
+
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+            border: Border.all(color: AppColors.borderSubtle),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Icon tile
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                  gradient: LinearGradient(
+                    colors: gradient,
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: gradient.last.withValues(alpha: 0.25),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Center(child: AppIcon(url: package.icon, size: 36)),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+
+              // Title + summary
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      package.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      package.summary ?? 'No description available',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+
+              // Action button
+              _ActionButton(
+                isInstalled: isInstalled,
+                isInstalling: isInstalling,
+                onInstall: onInstall,
+                onUninstall: onUninstall,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final bool isInstalled;
+  final bool isInstalling;
+  final VoidCallback onInstall;
+  final VoidCallback onUninstall;
+  const _ActionButton({
+    required this.isInstalled,
+    required this.isInstalling,
+    required this.onInstall,
+    required this.onUninstall,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (isInstalling) {
+      return Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: AppColors.brandSoft,
+          borderRadius: BorderRadius.circular(AppSpacing.radiusFull),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.brand,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Text(
+              'Installing',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: AppColors.brand,
+                  ),
+            ),
+          ],
+        ),
+      );
     }
-    return Image.network(
-      url!,
+    if (isInstalled) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: 6,
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.success.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusFull),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: AppColors.success,
+                  size: 16,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Installed',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: AppColors.success,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: onUninstall,
+            icon: const Icon(Icons.delete_outline_rounded),
+            color: AppColors.danger,
+            tooltip: 'Uninstall',
+          ),
+        ],
+      );
+    }
+    return ElevatedButton(
+      onPressed: onInstall,
+      style: ElevatedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.xl,
+          vertical: AppSpacing.md,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusFull),
+        ),
+      ),
+      child: const Text('Install'),
+    );
+  }
+}
+
+// =====================================================================
+// APP ICON
+// =====================================================================
+class AppIcon extends StatelessWidget {
+  final String? url;
+  final double size;
+  const AppIcon({super.key, required this.url, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    if (url == null || url!.isEmpty) {
+      return Icon(Icons.apps_rounded, size: size, color: Colors.white);
+    }
+    return CachedNetworkImage(
+      imageUrl: url!,
       width: size,
       height: size,
+      memCacheWidth: (size * MediaQuery.devicePixelRatioOf(context)).toInt(),
       fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) =>
-          Icon(Icons.broken_image, size: size, color: Colors.white),
+      placeholder: (_, __) =>
+          Icon(Icons.apps_rounded, size: size, color: Colors.white54),
+      errorWidget: (_, __, ___) =>
+          Icon(Icons.broken_image_rounded, size: size, color: Colors.white),
     );
   }
 }
