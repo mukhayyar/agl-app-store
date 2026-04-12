@@ -29,8 +29,8 @@ enum AppSource {
   ///
   /// Both remotes must be configured on the device:
   ///
-  ///   flatpak remote-add --if-not-exists \
-  ///     --gpg-import=<(curl -s https://repo.agl-store.cyou/public.gpg) \
+  ///   curl -s https://repo.agl-store.cyou/public.gpg | \
+  ///     flatpak remote-add --if-not-exists --gpg-import=/dev/stdin \
   ///     penshub https://repo.agl-store.cyou
   ///
   ///   flatpak remote-add --if-not-exists flathub \

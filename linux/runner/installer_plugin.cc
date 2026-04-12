@@ -17,13 +17,14 @@ static const char *kMethodUpdate = "updateFlatpak";
 static const char *kEventsChannelName = "com.pens.flatpak/installer_events";
 
 // Flatpak remote that holds the AGL App Store (PensHub) packages.
-// The remote must already be added on the device:
-//   flatpak remote-add --if-not-exists \
-//     --gpg-import=<(curl -s https://repo.agl-store.cyou/public.gpg) \
+// The remote must already be added on the device (GPG-signed repo):
+//
+//   curl -s https://repo.agl-store.cyou/public.gpg | \
+//     flatpak remote-add --if-not-exists --gpg-import=/dev/stdin \
 //     penshub https://repo.agl-store.cyou
 //
-// Once added, install with:
-//   flatpak install penshub com.pens.AppName
+// Then install any app:
+//   flatpak install penshub com.pens.AsciiArt
 static const char *kFlatpakRemote = "penshub";
 
 static FlEventChannel *g_events_channel = nullptr;
@@ -271,8 +272,8 @@ static void method_call_cb(FlMethodChannel *channel,
 
         // --- ASYNC install, no freeze ---
         gchar *argv[] = {
-            (gchar *)"flatpak", (gchar *)"install", (gchar *)remote,
-            (gchar *)app_id, (gchar *)"-y", nullptr};
+            (gchar *)"flatpak", (gchar *)"install", (gchar *)"--user",
+            (gchar *)remote, (gchar *)app_id, (gchar *)"-y", nullptr};
 
         GPid pid = 0;
         gint out_fd = -1, err_fd = -1;
@@ -403,7 +404,7 @@ static void method_call_cb(FlMethodChannel *channel,
             return;
         }
 
-        const char *argv[] = {"flatpak", "info", app_id, nullptr};
+        const char *argv[] = {"flatpak", "info", "--user", app_id, nullptr};
         gint status = -1;
         GError *error = nullptr;
         gchar *out = nullptr;
@@ -425,7 +426,7 @@ static void method_call_cb(FlMethodChannel *channel,
     if (g_strcmp0(method, kMethodListInstalled) == 0)
     {
         // We request 'application' (ID) and 'name' columns
-        const char *argv[] = {"flatpak", "list", "--app", "--columns=application,name", nullptr};
+        const char *argv[] = {"flatpak", "list", "--user", "--app", "--columns=application,name", nullptr};
         gchar *out = nullptr;
         spawn_and_capture(argv, &out, nullptr, nullptr, nullptr);
 
@@ -492,6 +493,7 @@ static void method_call_cb(FlMethodChannel *channel,
         gchar *argv[] = {
             (gchar *)"flatpak",
             (gchar *)"uninstall",
+            (gchar *)"--user",
             (gchar *)app_id,
             (gchar *)"-y",
             nullptr};
@@ -578,7 +580,7 @@ static void method_call_cb(FlMethodChannel *channel,
             return;
         }
 
-        const char *argv[] = {"flatpak", "update", app_id, "-y", nullptr};
+        const char *argv[] = {"flatpak", "update", "--user", app_id, "-y", nullptr};
         gint status = -1;
         GError *error = nullptr;
         gboolean ok = spawn_and_capture(argv, nullptr, nullptr, &status, &error);
