@@ -15,6 +15,17 @@ static const char *kMethodListInstalled = "listInstalled";
 static const char *kMethodUninstall = "uninstallFlatpak";
 static const char *kMethodUpdate = "updateFlatpak";
 static const char *kEventsChannelName = "com.pens.flatpak/installer_events";
+
+// Flatpak remote that holds the AGL App Store (PensHub) packages.
+// The remote must already be added on the device:
+//   flatpak remote-add --if-not-exists \
+//     --gpg-import=<(curl -s https://repo.agl-store.cyou/public.gpg) \
+//     penshub https://repo.agl-store.cyou
+//
+// Once added, install with:
+//   flatpak install penshub com.pens.AppName
+static const char *kFlatpakRemote = "penshub";
+
 static FlEventChannel *g_events_channel = nullptr;
 
 static void send_event_map(FlValue *map);
@@ -225,10 +236,11 @@ static void method_call_cb(FlMethodChannel *channel,
 
     const gchar *method = fl_method_call_get_name(method_call);
 
-    // ---- installFlatpak(appId) ----
+    // ---- installFlatpak(appId, remote?) ----
     if (g_strcmp0(method, kMethodInstall) == 0)
     {
         const gchar *app_id = nullptr;
+        const gchar *remote = kFlatpakRemote; // default: PensHub
         if (FlValue *args = fl_method_call_get_args(method_call))
         {
             if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP)
@@ -237,6 +249,15 @@ static void method_call_cb(FlMethodChannel *channel,
                 if (v && fl_value_get_type(v) == FL_VALUE_TYPE_STRING)
                 {
                     app_id = fl_value_get_string(v);
+                }
+                FlValue *r = fl_value_lookup_string(args, "remote");
+                if (r && fl_value_get_type(r) == FL_VALUE_TYPE_STRING)
+                {
+                    const gchar *override_remote = fl_value_get_string(r);
+                    if (override_remote && std::strlen(override_remote) > 0)
+                    {
+                        remote = override_remote;
+                    }
                 }
             }
         }
@@ -250,7 +271,7 @@ static void method_call_cb(FlMethodChannel *channel,
 
         // --- ASYNC install, no freeze ---
         gchar *argv[] = {
-            (gchar *)"flatpak", (gchar *)"install", (gchar *)"flathub",
+            (gchar *)"flatpak", (gchar *)"install", (gchar *)remote,
             (gchar *)app_id, (gchar *)"-y", nullptr};
 
         GPid pid = 0;
