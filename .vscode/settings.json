@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "/home/mukhayyar/Documents/agl_app_store/linux"
+  "cmake.sourceDirectory": "/home/mukhayyar/Documents/agl_app_store/linux",
+  "dart.flutterSdkPath": ".fvm/versions/3.41.6"
 }

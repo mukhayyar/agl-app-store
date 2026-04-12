@@ -1,25 +1,32 @@
-name: ivi_monitor
-description: AGL IVI Monitor App for Raspberry Pi
-
-publish_to: 'none'
+name: agl_app_store
+description: "A new Flutter project."
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
-
+  sdk: ^3.9.2
 dependencies:
   flutter:
     sdk: flutter
-  http: ^1.2.0
-  shared_preferences: ^2.2.3
-  fl_chart: ^0.68.0
+
+  cupertino_icons: ^1.0.8
+  http: ^1.1.0
+  flutter_bloc: ^8.1.3  # Contoh versi terbaru, sesuaikan jika perl u
+  equatable: ^2.0.5      # Contoh versi terbaru, sesuaikan jika perlu
+  sembast: ^3.6.0
+  path_provider: ^2.1.4
+  path: ^1.9.0
   provider: ^6.1.2
+  cached_network_image: ^3.4.1
+  google_fonts: ^6.2.1
+  fl_chart: ^0.68.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+
+  flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true

@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -5,6 +6,8 @@ import '../bloc/flatpak_bloc.dart';
 import '../data/flatpak_repository.dart';
 import '../models/flatpak_package.dart';
 import '../platform/flatpak_platform.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_spacing.dart';
 
 class InstalledAppsPage extends StatefulWidget {
   const InstalledAppsPage({super.key});
@@ -34,104 +37,173 @@ class _InstalledAppsPageState extends State<InstalledAppsPage> {
       _isLoading = false;
     });
 
-    // Background metadata enrichment (safe, async)
     repo.enrichMissingDetails(apps);
-  }
-
-  /// 🔥 Remove app locally as soon as uninstall finishes
-  void _removeLocally(String appId) {
-    setState(() {
-      _installedApps.removeWhere((a) => a.id == appId || a.flatpakId == appId);
-    });
   }
 
   @override
   Widget build(BuildContext context) {
     return BlocListener<FlatpakBloc, FlatpakState>(
+      listenWhen: (prev, curr) {
+        if (prev is FlatpakLoaded && curr is FlatpakLoaded) {
+          return prev.installed != curr.installed;
+        }
+        return false;
+      },
       listener: (context, state) {
         if (state is FlatpakLoaded) {
-          // Sync local list with bloc-installed set
-          _installedApps.removeWhere(
-            (app) => !state.installed.contains(app.id),
-          );
+          final installedSet = state.installed;
+          setState(() {
+            _installedApps.removeWhere(
+              (app) => !installedSet.contains(app.id),
+            );
+          });
         }
       },
       child: BlocBuilder<FlatpakBloc, FlatpakState>(
+        buildWhen: (prev, curr) {
+          if (prev.runtimeType != curr.runtimeType) return true;
+          if (prev is FlatpakLoaded && curr is FlatpakLoaded) {
+            return prev.uninstallingIds != curr.uninstallingIds;
+          }
+          return true;
+        },
         builder: (context, state) {
           final uninstallingIds = state is FlatpakLoaded
               ? state.uninstallingIds
               : const <String>{};
 
           return Scaffold(
-            backgroundColor: Colors.white,
-            body: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : CustomScrollView(
-                    slivers: [
-                      // ============================
-                      // HEADER
-                      // ============================
-                      const SliverToBoxAdapter(
-                        child: Padding(
-                          padding: EdgeInsets.fromLTRB(20, 60, 20, 30),
-                          child: Text(
-                            "Installed Apps",
-                            style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
+            backgroundColor: AppColors.background,
+            body: SafeArea(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : CustomScrollView(
+                      slivers: [
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(
+                              AppSpacing.pageGutter,
+                              AppSpacing.lg,
+                              AppSpacing.pageGutter,
+                              AppSpacing.xxl,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Installed apps',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .displaySmall,
+                                ),
+                                const SizedBox(height: AppSpacing.xs),
+                                Text(
+                                  '${_installedApps.length} app${_installedApps.length == 1 ? "" : "s"} on your device',
+                                  style:
+                                      Theme.of(context).textTheme.bodyMedium,
+                                ),
+                              ],
                             ),
                           ),
                         ),
-                      ),
+                        if (_installedApps.isEmpty)
+                          SliverFillRemaining(
+                            hasScrollBody: false,
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(AppSpacing.huge),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      padding:
+                                          const EdgeInsets.all(AppSpacing.xl),
+                                      decoration: const BoxDecoration(
+                                        color: AppColors.brandSoft,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(
+                                        Icons.inbox_rounded,
+                                        size: 36,
+                                        color: AppColors.brand,
+                                      ),
+                                    ),
+                                    const SizedBox(height: AppSpacing.lg),
+                                    Text(
+                                      'No apps installed',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleLarge,
+                                    ),
+                                    const SizedBox(height: AppSpacing.xs),
+                                    Text(
+                                      'Browse the home screen to install your first app.',
+                                      textAlign: TextAlign.center,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          SliverPadding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: AppSpacing.pageGutter,
+                            ),
+                            sliver: SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  final app = _installedApps[index];
+                                  final isUninstalling =
+                                      uninstallingIds.contains(app.id);
 
-                      // ============================
-                      // EMPTY STATE
-                      // ============================
-                      if (_installedApps.isEmpty)
+                                  return RepaintBoundary(
+                                    key: ValueKey(app.id),
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(
+                                        bottom: AppSpacing.md,
+                                      ),
+                                      child: _InstalledAppCard(
+                                        app: app,
+                                        isUninstalling: isUninstalling,
+                                        onLaunch: () async {
+                                          try {
+                                            await FlatpakPlatform.launch(
+                                                app.id);
+                                          } catch (e) {
+                                            if (!context.mounted) return;
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                    'Launch failed: $e'),
+                                              ),
+                                            );
+                                          }
+                                        },
+                                        onUninstall: () {
+                                          context
+                                              .read<FlatpakBloc>()
+                                              .add(UninstallApp(app.id));
+                                        },
+                                      ),
+                                    ),
+                                  );
+                                },
+                                childCount: _installedApps.length,
+                                addAutomaticKeepAlives: false,
+                              ),
+                            ),
+                          ),
                         const SliverToBoxAdapter(
-                          child: Center(
-                            child: Padding(
-                              padding: EdgeInsets.all(40),
-                              child: Text("No apps installed"),
-                            ),
-                          ),
+                          child: SizedBox(height: AppSpacing.huge),
                         ),
-
-                      // ============================
-                      // APP LIST
-                      // ============================
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          final app = _installedApps[index];
-                          final isUninstalling = uninstallingIds.contains(
-                            app.id,
-                          );
-
-                          return _InstalledAppCard(
-                            app: app,
-                            isUninstalling: isUninstalling,
-                            onLaunch: () async {
-                              try {
-                                await FlatpakPlatform.launch(app.id);
-                              } catch (e) {
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text("Launch failed: $e")),
-                                );
-                              }
-                            },
-                            onUninstall: () {
-                              context.read<FlatpakBloc>().add(
-                                UninstallApp(app.id),
-                              );
-                            },
-                          );
-                        }, childCount: _installedApps.length),
-                      ),
-
-                      const SliverToBoxAdapter(child: SizedBox(height: 120)),
-                    ],
-                  ),
+                      ],
+                    ),
+            ),
           );
         },
       ),
@@ -157,129 +229,125 @@ class _InstalledAppCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final gradient = AppColors.gradientFor(app.id);
+
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+        border: Border.all(color: AppColors.borderSubtle),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ============================
-          // LEFT: INFO + LAUNCH
-          // ============================
+          // Icon tile
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+              gradient: LinearGradient(
+                colors: gradient,
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: gradient.last.withValues(alpha: 0.25),
+                  blurRadius: 12,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Center(
+              child: app.icon != null
+                  ? CachedNetworkImage(
+                      imageUrl: app.icon!,
+                      width: 36,
+                      height: 36,
+                      memCacheWidth: 72,
+                      fit: BoxFit.contain,
+                      placeholder: (_, __) => const Icon(
+                        Icons.apps_rounded,
+                        size: 36,
+                        color: Colors.white,
+                      ),
+                      errorWidget: (_, __, ___) => const Icon(
+                        Icons.apps_rounded,
+                        size: 36,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.apps_rounded,
+                      size: 36,
+                      color: Colors.white,
+                    ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.lg),
+
+          // Info
           Expanded(
-            flex: 4,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(height: 20),
                 Text(
                   app.name,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
-                  "v${app.version ?? 'Latest'}",
-                  style: TextStyle(fontSize: 14, color: Colors.blueGrey[400]),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  height: 36,
-                  child: ElevatedButton(
-                    onPressed: onLaunch,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey[200],
-                      foregroundColor: Colors.black,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: const Text("Launch"),
-                  ),
+                  'v${app.version ?? "Latest"}',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
           ),
 
-          const SizedBox(width: 16),
-
-          // ============================
-          // RIGHT: CARD + UNINSTALL
-          // ============================
-          Expanded(
-            flex: 5,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Container(
-                  height: 140,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF4DB6AC),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 10,
-                        offset: const Offset(0, 5),
-                      ),
-                    ],
-                  ),
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: app.icon != null
-                          ? Image.network(app.icon!, width: 40, height: 40)
-                          : const Icon(
-                              Icons.apps,
-                              size: 40,
-                              color: Colors.white,
-                            ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // ============================
-                // UNINSTALL BUTTON (BLOCKED)
-                // ============================
-                SizedBox(
-                  height: 36,
-                  child: ElevatedButton(
-                    onPressed: isUninstalling ? null : onUninstall,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey[200],
-                      foregroundColor: Colors.black,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: isUninstalling
-                        ? Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              SizedBox(width: 8),
-                              Text("Uninstalling..."),
-                            ],
-                          )
-                        : const Text("Uninstall"),
-                  ),
-                ),
-              ],
+          // Actions
+          IconButton(
+            onPressed: onLaunch,
+            tooltip: 'Launch',
+            icon: Container(
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              decoration: BoxDecoration(
+                color: AppColors.brandSoft,
+                borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+              ),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: AppColors.brand,
+                size: 20,
+              ),
             ),
+          ),
+          IconButton(
+            onPressed: isUninstalling ? null : onUninstall,
+            tooltip: 'Uninstall',
+            icon: isUninstalling
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.danger,
+                    ),
+                  )
+                : Container(
+                    padding: const EdgeInsets.all(AppSpacing.sm),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                    ),
+                    child: const Icon(
+                      Icons.delete_outline_rounded,
+                      color: AppColors.danger,
+                      size: 20,
+                    ),
+                  ),
           ),
         ],
       ),

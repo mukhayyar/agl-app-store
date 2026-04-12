@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../data/flatpak_repository.dart';
+import '../models/app_source.dart';
 import '../models/flatpak_package.dart';
 import '../platform/flatpak_platform.dart';
 
@@ -19,6 +20,16 @@ abstract class FlatpakEvent extends Equatable {
 
 class RefreshAll extends FlatpakEvent {
   const RefreshAll();
+}
+
+/// Switch the active catalog source (PensHub ↔ Flathub).
+///
+/// Wipes the local cache, resets pagination, and re-fetches the home feed.
+class SwitchSource extends FlatpakEvent {
+  final AppSource source;
+  const SwitchSource(this.source);
+  @override
+  List<Object?> get props => [source];
 }
 
 class LoadFirstPage extends FlatpakEvent {
@@ -87,6 +98,7 @@ class FlatpakLoaded extends FlatpakState {
   final int pageSize;
   final bool hasMore;
   final String? query;
+  final AppSource source;
 
   final Set<String> installed;
   final Set<String> installingIds;
@@ -99,6 +111,7 @@ class FlatpakLoaded extends FlatpakState {
     required this.pageSize,
     required this.hasMore,
     required this.installed,
+    required this.source,
     this.query,
     this.installingIds = const {},
     this.uninstallingIds = const {},
@@ -111,6 +124,7 @@ class FlatpakLoaded extends FlatpakState {
     int? pageSize,
     bool? hasMore,
     String? query,
+    AppSource? source,
     Set<String>? installed,
     Set<String>? installingIds,
     Set<String>? uninstallingIds,
@@ -122,6 +136,7 @@ class FlatpakLoaded extends FlatpakState {
       pageSize: pageSize ?? this.pageSize,
       hasMore: hasMore ?? this.hasMore,
       query: query ?? this.query,
+      source: source ?? this.source,
       installed: installed ?? this.installed,
       installingIds: installingIds ?? this.installingIds,
       uninstallingIds: uninstallingIds ?? this.uninstallingIds,
@@ -136,6 +151,7 @@ class FlatpakLoaded extends FlatpakState {
     pageSize,
     hasMore,
     query,
+    source,
     installed,
     installingIds,
     uninstallingIds,
@@ -158,6 +174,22 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
   static const _pageSize = 20;
 
   StreamSubscription? _installSub;
+
+  // Static RegExp — compiled once, reused across all instances
+  static final _stageRe = RegExp(
+    r'\[flatpak:(?<id>[^\]]+)\]\s+.*?\s+(?<step>\d+)\/(?<total>\d+)'
+    r'[\s\W\D\S]+?'
+    r'(?<percent>\d{1,3})%',
+  );
+  static final _simpleRe = RegExp(
+    r'\[flatpak:(?<id>[^\]]+)\].*?(?<percent>\d{1,3})%',
+  );
+  static final _installDoneRe = RegExp(
+    r'\[flatpak:(?<id>[^\]]+)\]\s+Installation complete\.?',
+  );
+  static final _uninstallDoneRe = RegExp(
+    r'\[flatpak:(?<id>[^\]]+)\]\s+Uninstall complete\.?',
+  );
 
   FlatpakBloc({required this.repo}) : super(FlatpakLoading()) {
     /// ---------------------
@@ -203,6 +235,7 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
             hasMore: items.length < total,
             query: event.query,
             installed: installed,
+            source: repo.currentSource,
           ),
         );
 
@@ -213,44 +246,52 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
     });
 
     /// ---------------------
-    /// LOAD NEXT PAGE
+    /// LOAD NEXT PAGE — with debounce to prevent rapid-fire pagination
     /// ---------------------
-    on<LoadNextPage>((event, emit) async {
-      final s = state;
-      if (s is! FlatpakLoaded || !s.hasMore) return;
+    on<LoadNextPage>(
+      (event, emit) async {
+        final s = state;
+        if (s is! FlatpakLoaded || !s.hasMore) return;
 
-      try {
-        final nextPage = s.page + 1;
-        final nextItems = await repo.getPage(
-          page: nextPage,
-          pageSize: s.pageSize,
-          query: s.query,
-        );
-        final total = await repo.totalCount(query: s.query);
+        try {
+          final nextPage = s.page + 1;
+          final nextItems = await repo.getPage(
+            page: nextPage,
+            pageSize: s.pageSize,
+            query: s.query,
+          );
+          final total = await repo.totalCount(query: s.query);
+
+          emit(
+            s.copyWith(
+              items: [...s.items, ...nextItems],
+              page: nextPage,
+              hasMore: (nextPage * s.pageSize) < total,
+            ),
+          );
+        } catch (e) {
+          emit(FlatpakError('Load more failed: $e'));
+        }
+      },
+      transformer: _debounce(const Duration(milliseconds: 300)),
+    );
+
+    /// ---------------------
+    /// INSTALL PROGRESS — throttle to avoid excessive UI rebuilds
+    /// ---------------------
+    on<InstallProgressEvent>(
+      (e, emit) {
+        final s = state;
+        if (s is! FlatpakLoaded) return;
 
         emit(
           s.copyWith(
-            items: [...s.items, ...nextItems],
-            page: nextPage,
-            hasMore: (nextPage * s.pageSize) < total,
+            installProgress: {...s.installProgress, e.appId: e.percent},
           ),
         );
-      } catch (e) {
-        emit(FlatpakError('Load more failed: $e'));
-      }
-    });
-
-    /// ---------------------
-    /// INSTALL PROGRESS
-    /// ---------------------
-    on<InstallProgressEvent>((e, emit) {
-      final s = state;
-      if (s is! FlatpakLoaded) return;
-
-      emit(
-        s.copyWith(installProgress: {...s.installProgress, e.appId: e.percent}),
-      );
-    });
+      },
+      transformer: _debounce(const Duration(milliseconds: 200)),
+    );
 
     /// ---------------------
     /// REFRESH ALL
@@ -272,6 +313,35 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
           pageSize: _pageSize,
           hasMore: first.length < total,
           installed: installed,
+          source: repo.currentSource,
+        ),
+      );
+
+      add(const EnrichCurrentPage());
+    });
+
+    /// ---------------------
+    /// SWITCH SOURCE (PensHub ↔ Flathub)
+    /// ---------------------
+    on<SwitchSource>((event, emit) async {
+      if (repo.currentSource == event.source) return;
+
+      emit(FlatpakLoading());
+      await repo.setSource(event.source); // wipes cache internally
+      await repo.refreshAllApps();
+
+      final installed = await repo.installedIds();
+      final first = await repo.getPage(page: 1, pageSize: _pageSize);
+      final total = await repo.totalCount();
+
+      emit(
+        FlatpakLoaded(
+          items: first,
+          page: 1,
+          pageSize: _pageSize,
+          hasMore: first.length < total,
+          installed: installed,
+          source: repo.currentSource,
         ),
       );
 
@@ -353,30 +423,10 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
     /// ---------------------
     /// FLATPAK EVENT STREAM
     /// ---------------------
-    final stageRe = RegExp(
-      // ID and 'Installing'
-      // Note the added '.*?' after 'Installing' to account for variations like 'Downloading'
-      r'\[flatpak:(?<id>[^\]]+)\]\s+.*?\s+(?<step>\d+)\/(?<total>\d+)' +
-          // Be extremely forgiving of the junk between step count and percentage
-          r'[\s\W\D\S]+?' +
-          r'(?<percent>\d{1,3})%',
-    );
-    final simpleRe = RegExp(
-      r'\[flatpak:(?<id>[^\]]+)\].*?(?<percent>\d{1,3})%',
-    );
-    final installDoneRe = RegExp(
-      r'\[flatpak:(?<id>[^\]]+)\]\s+Installation complete\.?',
-    );
-    final uninstallDoneRe = RegExp(
-      r'\[flatpak:(?<id>[^\]]+)\]\s+Uninstall complete\.?',
-    );
-
-    final lastProgress = <String, int>{};
-
     _installSub = FlatpakPlatform.installEvents().listen((event) {
       try {
         // =============================
-        // 1️⃣ STRUCTURED MAP EVENTS (MAIN)
+        // 1. STRUCTURED MAP EVENTS (MAIN)
         // =============================
         if (event is Map) {
           final m = Map<String, dynamic>.from(event);
@@ -385,7 +435,6 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
           final appId = FlatpakRepository.normalizeFlatpakId(m['appId']);
 
           if (type == 'progress') {
-            // --- 1. Try to get Step/Total for weighted progress ---
             final step = m['step'] as int?;
             final total = m['total'] as int?;
             final p = m['percent'] as int;
@@ -393,21 +442,9 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
             int finalPercent;
 
             if (step != null && total != null && total > 0) {
-              // Apply the weighted (n/n) progress logic
               finalPercent = (((step - 1) + (p / 100)) / total * 100).round();
-
-              // Debug print to confirm use of weighted logic
-              debugPrint(
-                "Install progress (Map/Weighted): id=$appId step=$step/$total inner_p=$p final_p=$finalPercent",
-              );
             } else {
-              // --- 2. Fallback to simple percent if step/total are missing ---
               finalPercent = p.clamp(0, 100);
-
-              // Debug print for simple map progress
-              debugPrint(
-                "Install progress (Map/Simple): id=$appId percent=$finalPercent",
-              );
             }
 
             add(InstallProgressEvent(appId, finalPercent));
@@ -423,12 +460,12 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
         }
 
         // =============================
-        // 2️⃣ RAW STDOUT STRING (FALLBACK)
+        // 2. RAW STDOUT STRING (FALLBACK)
         // =============================
         if (event is String) {
           final line = event;
 
-          final installDone = installDoneRe.firstMatch(line);
+          final installDone = _installDoneRe.firstMatch(line);
           if (installDone != null) {
             add(
               _InstallFinished(
@@ -441,7 +478,7 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
             return;
           }
 
-          final uninstallDone = uninstallDoneRe.firstMatch(line);
+          final uninstallDone = _uninstallDoneRe.firstMatch(line);
           if (uninstallDone != null) {
             add(
               _UninstallFinished(
@@ -454,7 +491,7 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
             return;
           }
 
-          final staged = stageRe.firstMatch(line);
+          final staged = _stageRe.firstMatch(line);
           if (staged != null) {
             final id = FlatpakRepository.normalizeFlatpakId(
               staged.namedGroup('id')!,
@@ -463,22 +500,17 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
             final total = int.parse(staged.namedGroup('total')!);
             final p = int.parse(staged.namedGroup('percent')!);
 
-            debugPrint(
-              "Install progress parse: id=$id step=$step/$total percent=$p",
-            );
-
             final percent = (((step - 1) + (p / 100)) / total * 100).round();
             add(InstallProgressEvent(id, percent));
             return;
           }
 
-          final simple = simpleRe.firstMatch(line);
+          final simple = _simpleRe.firstMatch(line);
           if (simple != null) {
             final id = FlatpakRepository.normalizeFlatpakId(
               simple.namedGroup('id')!,
             );
             final p = int.parse(simple.namedGroup('percent')!);
-            debugPrint("Install progress parse (simple): id=$id percent=$p");
             add(InstallProgressEvent(id, p));
           }
         }
@@ -488,9 +520,49 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
     });
   }
 
+  /// Debounce transformer for events that fire rapidly
+  static EventTransformer<E> _debounce<E>(Duration duration) {
+    return (events, mapper) =>
+        events.transform(_DebounceTransformer(duration)).asyncExpand(mapper);
+  }
+
   @override
   Future<void> close() {
     _installSub?.cancel();
     return super.close();
+  }
+}
+
+/// Lightweight debounce StreamTransformer
+class _DebounceTransformer<T> extends StreamTransformerBase<T, T> {
+  final Duration duration;
+  const _DebounceTransformer(this.duration);
+
+  @override
+  Stream<T> bind(Stream<T> stream) {
+    Timer? timer;
+    late StreamController<T> controller;
+
+    controller = StreamController<T>(
+      onListen: () {
+        final sub = stream.listen(
+          (data) {
+            timer?.cancel();
+            timer = Timer(duration, () => controller.add(data));
+          },
+          onError: controller.addError,
+          onDone: () {
+            timer?.cancel();
+            controller.close();
+          },
+        );
+        controller.onCancel = () {
+          timer?.cancel();
+          sub.cancel();
+        };
+      },
+    );
+
+    return controller.stream;
   }
 }

@@ -6,8 +6,14 @@ class FlatpakPlatform {
 
   static Stream<dynamic> installEvents() => _events.receiveBroadcastStream();
 
-  static Future<void> install(String appId) async {
-    await _channel.invokeMethod('installFlatpak', {'appId': appId});
+  /// Installs a flatpak app from the given [remote] (e.g. `flathub` or
+  /// `repo.agl-store.cyou`). When [remote] is null the native plugin falls
+  /// back to its compiled-in default (PensHub).
+  static Future<void> install(String appId, {String? remote}) async {
+    await _channel.invokeMethod('installFlatpak', {
+      'appId': appId,
+      if (remote != null) 'remote': remote,
+    });
   }
 
   static Future<void> launch(String appId) async {
