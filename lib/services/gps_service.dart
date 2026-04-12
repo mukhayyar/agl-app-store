@@ -1,120 +1,175 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 
-class GpsService extends ChangeNotifier {
-  double speedKmh = 0;
-  double? lat;
-  double? lon;
-  bool hasGps = false;
+class GpsData {
+  final double speedKmh;
+  final double? latitude;
+  final double? longitude;
+  final bool hasSignal;
 
+  const GpsData({
+    required this.speedKmh,
+    this.latitude,
+    this.longitude,
+    required this.hasSignal,
+  });
+
+  static const GpsData noSignal = GpsData(speedKmh: 0, hasSignal: false);
+}
+
+class GpsService extends ChangeNotifier {
+  GpsData _data = GpsData.noSignal;
+  GpsData get data => _data;
+
+  StreamSubscription<String>? _sub;
   Timer? _simTimer;
-  StreamSubscription<List<int>>? _gpsSubscription;
-  double _simT = 0;
-  String _buffer = '';
+  bool _running = false;
+  bool _usingReal = false;
+
+  // Simulation state
+  double _simSpeed = 0.0;
+  double _simAccel = 1.2;
+  final _rng = math.Random();
+
+  static const _serialPaths = ['/dev/ttyUSB0', '/dev/ttyS0', '/dev/ttyACM0'];
 
   void start() {
-    _tryGpsHardware();
+    if (_running) return;
+    _running = true;
+    _tryOpenSerial();
   }
 
   void stop() {
+    _sub?.cancel();
     _simTimer?.cancel();
+    _sub = null;
     _simTimer = null;
-    _gpsSubscription?.cancel();
-    _gpsSubscription = null;
+    _running = false;
   }
 
-  Future<void> _tryGpsHardware() async {
-    final ports = ['/dev/ttyUSB0', '/dev/ttyS0', '/dev/ttyACM0'];
-    for (final port in ports) {
+  Future<void> _tryOpenSerial() async {
+    for (final path in _serialPaths) {
       try {
-        final file = File(port);
-        if (await file.exists()) {
-          final stream = file.openRead();
-          _gpsSubscription = stream.listen(
-            _onGpsData,
-            onError: (_) {
-              _gpsSubscription?.cancel();
-              _startSimulation();
-            },
-            onDone: _startSimulation,
-            cancelOnError: true,
-          );
-          hasGps = true;
-          notifyListeners();
-          return;
-        }
+        final file = File(path);
+        if (!await file.exists()) continue;
+
+        final stream = file
+            .openRead()
+            .transform(utf8.decoder)
+            .transform(const LineSplitter());
+
+        _sub = stream.listen(
+          _onNmeaLine,
+          onError: (_) => _fallbackToSim(),
+          cancelOnError: true,
+        );
+        _usingReal = true;
+        return;
       } catch (_) {
-        // Try next port
+        continue;
       }
     }
-    // No hardware GPS found — start simulation
-    _startSimulation();
+    _fallbackToSim();
   }
 
-  void _onGpsData(List<int> data) {
-    _buffer += String.fromCharCodes(data);
-    final lines = _buffer.split('\n');
-    // Keep incomplete last line in buffer
-    _buffer = lines.removeLast();
-    for (final line in lines) {
-      _parseNmea(line.trim());
-    }
+  void _fallbackToSim() {
+    _usingReal = false;
+    _simTimer ??= Timer.periodic(const Duration(milliseconds: 500), (_) => _simulateTick());
   }
 
-  void _parseNmea(String sentence) {
-    if (!sentence.startsWith('\$GPRMC')) return;
-    // Validate checksum
-    final asteriskIdx = sentence.lastIndexOf('*');
-    if (asteriskIdx < 0) return;
-    final parts = sentence.substring(1, asteriskIdx).split(',');
-    // \$GPRMC,HHMMSS.ss,A,Lat,N,Lon,E,Speed(knots),Course,Date,...
-    if (parts.length < 8) return;
-    final status = parts[2]; // A = active, V = void
+  void _simulateTick() {
+    // Simulate a drive: accelerate, cruise, decelerate
+    final noise = (_rng.nextDouble() - 0.5) * 0.8;
+    _simAccel += (_rng.nextDouble() - 0.5) * 0.3;
+    _simAccel = _simAccel.clamp(-3.0, 3.0);
+
+    if (_simSpeed > 110) _simAccel = -2.0;
+    if (_simSpeed < 5) _simAccel = 1.5;
+
+    _simSpeed = (_simSpeed + _simAccel * 0.5 + noise).clamp(0.0, 120.0);
+
+    _data = GpsData(
+      speedKmh: _simSpeed,
+      latitude: null,
+      longitude: null,
+      hasSignal: false,
+    );
+    notifyListeners();
+  }
+
+  void _onNmeaLine(String line) {
+    line = line.trim();
+    if (!line.startsWith('\$GPRMC') && !line.startsWith('\$GNRMC')) return;
+    if (!_validateNmeaChecksum(line)) return;
+
+    final parts = line.split(',');
+    if (parts.length < 10) return;
+
+    // Status: A=active, V=void
+    final status = parts[2];
     if (status != 'A') {
-      speedKmh = 0;
+      _data = GpsData.noSignal;
       notifyListeners();
       return;
     }
-    try {
-      final latRaw = double.tryParse(parts[3]);
-      final latDir = parts[4];
-      final lonRaw = double.tryParse(parts[5]);
-      final lonDir = parts[6];
-      final speedKnots = double.tryParse(parts[7]);
 
-      if (latRaw != null && lonRaw != null) {
-        lat = _nmeaToDecimal(latRaw, latDir);
-        lon = _nmeaToDecimal(lonRaw, lonDir);
-        hasGps = true;
-      }
-      if (speedKnots != null) {
-        speedKmh = speedKnots * 1.852;
-      }
-      notifyListeners();
-    } catch (_) {}
-  }
+    // Speed in knots → km/h
+    final speedKnots = double.tryParse(parts[7]);
+    final speedKmh = speedKnots != null ? speedKnots * 1.852 : 0.0;
 
-  double _nmeaToDecimal(double raw, String dir) {
-    final degrees = (raw / 100).floor().toDouble();
-    final minutes = raw - (degrees * 100);
-    double decimal = degrees + (minutes / 60.0);
-    if (dir == 'S' || dir == 'W') decimal = -decimal;
-    return decimal;
-  }
+    // Latitude
+    final latRaw = parts[3];
+    final latDir = parts[4];
+    final lat = _parseNmeaCoord(latRaw, latDir);
 
-  void _startSimulation() {
-    hasGps = false;
-    lat = null;
-    lon = null;
-    _simTimer?.cancel();
-    _simTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      _simT += 0.05;
-      speedKmh = 40.0 + 40.0 * sin(_simT * 0.1);
-      notifyListeners();
-    });
+    // Longitude
+    final lonRaw = parts[5];
+    final lonDir = parts[6];
+    final lon = _parseNmeaCoord(lonRaw, lonDir);
+
+    _data = GpsData(
+      speedKmh: speedKmh,
+      latitude: lat,
+      longitude: lon,
+      hasSignal: true,
+    );
     notifyListeners();
+  }
+
+  double? _parseNmeaCoord(String raw, String dir) {
+    if (raw.isEmpty) return null;
+    try {
+      final dotIdx = raw.indexOf('.');
+      if (dotIdx < 2) return null;
+      final degLen = dotIdx - 2;
+      final degrees = double.parse(raw.substring(0, degLen));
+      final minutes = double.parse(raw.substring(degLen));
+      double coord = degrees + minutes / 60.0;
+      if (dir == 'S' || dir == 'W') coord = -coord;
+      return coord;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _validateNmeaChecksum(String sentence) {
+    try {
+      final starIdx = sentence.lastIndexOf('*');
+      if (starIdx < 0 || starIdx >= sentence.length - 2) return true; // No checksum — accept
+      final data = sentence.substring(1, starIdx);
+      final checksumStr = sentence.substring(starIdx + 1, starIdx + 3);
+      final expected = int.parse(checksumStr, radix: 16);
+      int calc = 0;
+      for (final ch in data.codeUnits) {
+        calc ^= ch;
+      }
+      return calc == expected;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
