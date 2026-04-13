@@ -50,6 +50,37 @@ class AglApp extends StatelessWidget {
               debugShowCheckedModeBanner: false,
               theme: isDark ? AppTheme.dark() : AppTheme.light(),
               home: const _Shell(),
+              builder: (context, child) {
+                // Scale UI for small portrait displays (e.g. 7" 1080x1920)
+                // The app was designed for landscape; on portrait the logical
+                // pixels are too small, making everything tiny.
+                final mq = MediaQuery.of(context);
+                final isPortrait = mq.size.height > mq.size.width;
+                final shortSide = isPortrait ? mq.size.width : mq.size.height;
+                // Scale up if short side is narrow (< 600 logical px)
+                double scaleFactor = 1.0;
+                if (shortSide < 600) {
+                  scaleFactor = 1.35;
+                } else if (shortSide < 800) {
+                  scaleFactor = 1.2;
+                }
+                if (scaleFactor == 1.0) return child!;
+                return MediaQuery(
+                  data: mq.copyWith(
+                    textScaler: TextScaler.linear(
+                        mq.textScaler.scale(scaleFactor)),
+                  ),
+                  child: Transform.scale(
+                    scale: scaleFactor,
+                    alignment: Alignment.topLeft,
+                    child: SizedBox(
+                      width: mq.size.width / scaleFactor,
+                      height: mq.size.height / scaleFactor,
+                      child: child,
+                    ),
+                  ),
+                );
+              },
             );
           }),
         ),
