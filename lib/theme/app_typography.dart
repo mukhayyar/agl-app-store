@@ -3,110 +3,56 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'app_colors.dart';
 
-/// Typography tokens powered by Google Fonts (Plus Jakarta Sans).
-///
-/// Sizes follow a modular scale tuned for an app-store style UI:
-///   display → page-level hero ("Featured", "Installed Apps")
-///   title    → section headers, card titles
-///   body     → primary readable copy
-///   label    → buttons, chips, captions
 class AppTypography {
   AppTypography._();
 
-  /// Apply Plus Jakarta Sans to a base [TextTheme] and recolor for AGL.
-  static TextTheme buildTextTheme(TextTheme base) {
-    final textTheme = GoogleFonts.plusJakartaSansTextTheme(base).copyWith(
-      // Display
-      displayLarge: GoogleFonts.plusJakartaSans(
-        fontSize: 40,
-        fontWeight: FontWeight.w800,
-        letterSpacing: -0.8,
-        height: 1.1,
-        color: AppColors.textPrimary,
-      ),
-      displayMedium: GoogleFonts.plusJakartaSans(
-        fontSize: 32,
-        fontWeight: FontWeight.w800,
-        letterSpacing: -0.6,
-        height: 1.15,
-        color: AppColors.textPrimary,
-      ),
-      displaySmall: GoogleFonts.plusJakartaSans(
-        fontSize: 26,
-        fontWeight: FontWeight.w700,
-        letterSpacing: -0.4,
-        height: 1.2,
-        color: AppColors.textPrimary,
-      ),
-
-      // Headline / Title
-      headlineMedium: GoogleFonts.plusJakartaSans(
-        fontSize: 22,
-        fontWeight: FontWeight.w700,
-        letterSpacing: -0.2,
-        color: AppColors.textPrimary,
-      ),
-      headlineSmall: GoogleFonts.plusJakartaSans(
-        fontSize: 20,
-        fontWeight: FontWeight.w700,
-        color: AppColors.textPrimary,
-      ),
-      titleLarge: GoogleFonts.plusJakartaSans(
-        fontSize: 18,
-        fontWeight: FontWeight.w700,
-        color: AppColors.textPrimary,
-      ),
-      titleMedium: GoogleFonts.plusJakartaSans(
-        fontSize: 16,
-        fontWeight: FontWeight.w600,
-        color: AppColors.textPrimary,
-      ),
-      titleSmall: GoogleFonts.plusJakartaSans(
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-        color: AppColors.textPrimary,
-      ),
-
-      // Body
-      bodyLarge: GoogleFonts.plusJakartaSans(
-        fontSize: 16,
-        fontWeight: FontWeight.w400,
-        height: 1.55,
-        color: AppColors.textPrimary,
-      ),
-      bodyMedium: GoogleFonts.plusJakartaSans(
-        fontSize: 14,
-        fontWeight: FontWeight.w400,
-        height: 1.55,
-        color: AppColors.textSecondary,
-      ),
-      bodySmall: GoogleFonts.plusJakartaSans(
-        fontSize: 12,
-        fontWeight: FontWeight.w400,
-        height: 1.5,
-        color: AppColors.textTertiary,
-      ),
-
-      // Labels (buttons, chips)
-      labelLarge: GoogleFonts.plusJakartaSans(
-        fontSize: 15,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0.1,
-        color: AppColors.textPrimary,
-      ),
-      labelMedium: GoogleFonts.plusJakartaSans(
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0.1,
-        color: AppColors.textSecondary,
-      ),
-      labelSmall: GoogleFonts.plusJakartaSans(
-        fontSize: 11,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0.4,
-        color: AppColors.textTertiary,
-      ),
+  static TextTheme build(TextTheme base) {
+    return GoogleFonts.plusJakartaSansTextTheme(base).copyWith(
+      displayLarge: _s(40, FontWeight.w800, AppColors.textPrimary, -0.8, 1.1),
+      displayMedium: _s(32, FontWeight.w800, AppColors.textPrimary, -0.6, 1.15),
+      displaySmall: _s(26, FontWeight.w700, AppColors.textPrimary, -0.4, 1.2),
+      headlineMedium: _s(22, FontWeight.w700, AppColors.textPrimary, -0.2),
+      headlineSmall: _s(20, FontWeight.w700, AppColors.textPrimary),
+      titleLarge: _s(18, FontWeight.w700, AppColors.textPrimary),
+      titleMedium: _s(16, FontWeight.w600, AppColors.textPrimary),
+      titleSmall: _s(14, FontWeight.w600, AppColors.textPrimary),
+      bodyLarge: _s(16, FontWeight.w400, AppColors.textPrimary, 0, 1.55),
+      bodyMedium: _s(14, FontWeight.w400, AppColors.textSecondary, 0, 1.55),
+      bodySmall: _s(12, FontWeight.w400, AppColors.textTertiary, 0, 1.5),
+      labelLarge: _s(15, FontWeight.w600, AppColors.textPrimary, 0.1),
+      labelMedium: _s(13, FontWeight.w600, AppColors.textSecondary, 0.1),
+      labelSmall: _s(11, FontWeight.w600, AppColors.textTertiary, 0.4),
     );
-    return textTheme;
+  }
+
+  /// Dark-theme variant with light text colors.
+  static TextTheme buildDark(TextTheme base) {
+    const p = Color(0xFFF1F3F8);
+    const s = Color(0xFF8B93A8);
+    const t = Color(0xFF4A5168);
+    return GoogleFonts.plusJakartaSansTextTheme(base).copyWith(
+      displayLarge: _s(40, FontWeight.w800, p, -0.8, 1.1),
+      displayMedium: _s(32, FontWeight.w800, p, -0.6, 1.15),
+      displaySmall: _s(26, FontWeight.w700, p, -0.4, 1.2),
+      headlineMedium: _s(22, FontWeight.w700, p, -0.2),
+      headlineSmall: _s(20, FontWeight.w700, p),
+      titleLarge: _s(18, FontWeight.w700, p),
+      titleMedium: _s(16, FontWeight.w600, p),
+      titleSmall: _s(14, FontWeight.w600, p),
+      bodyLarge: _s(16, FontWeight.w400, p, 0, 1.55),
+      bodyMedium: _s(14, FontWeight.w400, s, 0, 1.55),
+      bodySmall: _s(12, FontWeight.w400, t, 0, 1.5),
+      labelLarge: _s(15, FontWeight.w600, p, 0.1),
+      labelMedium: _s(13, FontWeight.w600, s, 0.1),
+      labelSmall: _s(11, FontWeight.w600, t, 0.4),
+    );
+  }
+
+  static TextStyle _s(double sz, FontWeight w, Color c,
+      [double ls = 0, double h = 0]) {
+    return GoogleFonts.plusJakartaSans(
+      fontSize: sz, fontWeight: w, color: c,
+      letterSpacing: ls, height: h > 0 ? h : null,
+    );
   }
 }

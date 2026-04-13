@@ -1,11 +1,11 @@
-/// Spacing & radius scale used across the design system.
+/// Spacing & radius tokens tuned for automotive touch targets.
 ///
-/// Stick to these values rather than ad-hoc literals so layouts stay
-/// consistent and easy to retune from a single place.
+/// Minimum touch target is 48dp per Material guidelines; we default
+/// to 56dp for in-car use (gloved / imprecise taps).
 class AppSpacing {
   AppSpacing._();
 
-  // Spacing scale (4pt grid)
+  // Spacing (4pt grid)
   static const double xs = 4;
   static const double sm = 8;
   static const double md = 12;
@@ -15,14 +15,18 @@ class AppSpacing {
   static const double xxxl = 32;
   static const double huge = 48;
 
-  // Page horizontal padding
-  static const double pageGutter = 20;
+  // Page gutter
+  static const double pageH = 20;
 
   // Border radius
-  static const double radiusSm = 8;
-  static const double radiusMd = 12;
-  static const double radiusLg = 16;
-  static const double radiusXl = 20;
-  static const double radiusXxl = 28;
-  static const double radiusFull = 999;
+  static const double rSm = 8;
+  static const double rMd = 12;
+  static const double rLg = 16;
+  static const double rXl = 20;
+  static const double rXxl = 28;
+  static const double rFull = 999;
+
+  // Touch targets
+  static const double touchMin = 48;
+  static const double touchLg = 56;
 }
