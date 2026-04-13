@@ -114,6 +114,5 @@ class _LineChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_LineChartPainter old) =>
-      old.data != data || old.maxValue != maxValue;
+  bool shouldRepaint(_LineChartPainter old) => true;
 }
