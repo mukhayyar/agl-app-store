@@ -13,10 +13,10 @@ class SystemMonitor extends ChangeNotifier {
   double txBytesPerSec = 0;
 
   // History (60 samples)
-  final List<double> cpuHistory = List.filled(60, 0);
-  final List<double> ramHistory = List.filled(60, 0);
-  final List<double> rxHistory = List.filled(60, 0);
-  final List<double> txHistory = List.filled(60, 0);
+  final List<double> cpuHistory = List.filled(60, 0, growable: true);
+  final List<double> ramHistory = List.filled(60, 0, growable: true);
+  final List<double> rxHistory = List.filled(60, 0, growable: true);
+  final List<double> txHistory = List.filled(60, 0, growable: true);
 
   Timer? _timer;
 

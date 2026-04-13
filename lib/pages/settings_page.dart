@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../services/theme_service.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_spacing.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -8,8 +13,6 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  // State dummy untuk simulasi toggle switch
-  bool _isDarkMode = false;
   bool _autoUpdate = false;
   bool _locationAccess = false;
   bool _contactsAccess = false;
@@ -17,184 +20,175 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final themeSvc = context.watch<ThemeService>();
+
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 60.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header Title
-              const Text(
-                "Settings",
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black,
+      backgroundColor: theme.scaffoldBackgroundColor,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.pageH, AppSpacing.lg, AppSpacing.pageH, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Settings', style: theme.textTheme.displaySmall),
+                const SizedBox(height: AppSpacing.xxxl),
+
+                // --- App Storage Location ---
+                _SectionHeader('App storage location'),
+                const SizedBox(height: AppSpacing.md),
+                Container(
+                  width: double.infinity,
+                  height: 48,
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                  decoration: BoxDecoration(
+                    color: theme.cardTheme.color,
+                    borderRadius: BorderRadius.circular(AppSpacing.rMd),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  alignment: Alignment.centerLeft,
+                  child: Text('/var/lib/flatpak',
+                      style: theme.textTheme.bodyMedium),
                 ),
-              ),
-              const SizedBox(height: 32),
+                const SizedBox(height: AppSpacing.xxxl),
 
-              // --- App Storage Location ---
-              _buildSectionHeader("App storage location"),
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: const Color(
-                    0xFFF0F4F8,
-                  ), // Warna abu-abu muda sesuai gambar
-                  borderRadius: BorderRadius.circular(12),
+                // --- App Appearance ---
+                _SectionHeader('App appearance'),
+                _SwitchTile(
+                  title: 'Dark mode',
+                  subtitle: 'Switch between light and dark theme',
+                  value: themeSvc.isDark,
+                  onChanged: (val) => themeSvc.setDark(val),
                 ),
-                // Kosong seperti di desain, atau bisa diisi Text path
-              ),
-              const SizedBox(height: 32),
+                const SizedBox(height: AppSpacing.xxl),
 
-              // --- App Appearance ---
-              _buildSectionHeader("App appearance"),
-              _buildSwitchTile(
-                title: "Switch display",
-                subtitle: "Change into light or dark mode",
-                value: _isDarkMode,
-                onChanged: (val) => setState(() => _isDarkMode = val),
-              ),
-              const SizedBox(height: 24),
+                // --- App Updates ---
+                _SectionHeader('App updates'),
+                _SwitchTile(
+                  title: 'Auto-update apps',
+                  subtitle: 'Automatically update apps when connected to Wi-Fi',
+                  value: _autoUpdate,
+                  onChanged: (val) => setState(() => _autoUpdate = val),
+                ),
+                const SizedBox(height: AppSpacing.xxl),
 
-              // --- App Updates ---
-              _buildSectionHeader("App updates"),
-              _buildSwitchTile(
-                title: "Auto-update apps",
-                subtitle: "Automatically update apps when connected to Wi-Fi",
-                value: _autoUpdate,
-                onChanged: (val) => setState(() => _autoUpdate = val),
-              ),
-              const SizedBox(height: 24),
+                // --- Permissions ---
+                _SectionHeader('Permissions'),
+                _SwitchTile(
+                  title: 'Location access',
+                  subtitle: 'Allow apps to access your location',
+                  value: _locationAccess,
+                  onChanged: (val) => setState(() => _locationAccess = val),
+                ),
+                _SwitchTile(
+                  title: 'Contacts access',
+                  subtitle: 'Allow apps to access your contacts',
+                  value: _contactsAccess,
+                  onChanged: (val) => setState(() => _contactsAccess = val),
+                ),
+                _SwitchTile(
+                  title: 'Camera access',
+                  subtitle: 'Allow apps to access your camera',
+                  value: _cameraAccess,
+                  onChanged: (val) => setState(() => _cameraAccess = val),
+                ),
+                const SizedBox(height: AppSpacing.xxl),
 
-              // --- Permissions ---
-              _buildSectionHeader("Permissions"),
-              _buildSwitchTile(
-                title: "Location access",
-                subtitle: "Allow apps to access your location",
-                value: _locationAccess,
-                onChanged: (val) => setState(() => _locationAccess = val),
-              ),
-              _buildSwitchTile(
-                title: "Contacts access",
-                subtitle: "Allow apps to access your contacts",
-                value: _contactsAccess,
-                onChanged: (val) => setState(() => _contactsAccess = val),
-              ),
-              _buildSwitchTile(
-                title: "Camera access",
-                subtitle: "Allow apps to access your camera",
-                value: _cameraAccess,
-                onChanged: (val) => setState(() => _cameraAccess = val),
-              ),
-              const SizedBox(height: 24),
+                // --- About ---
+                _SectionHeader('About'),
+                const SizedBox(height: AppSpacing.md),
+                _InfoRow(
+                  title: 'Car ID',
+                  value: '3849f1c6-f27f-4652-94ea-f86919b44420',
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                _InfoRow(
+                  title: 'App Store Version',
+                  value: 'Version 1.2.3',
+                ),
 
-              // --- About ---
-              _buildSectionHeader("About"),
-              const SizedBox(height: 12),
-              _buildInfoRow(
-                title: "Car ID",
-                value: "3849f1c6-f27f-4652-94ea-f86919b44420",
-              ),
-              const SizedBox(height: 16),
-              _buildInfoRow(title: "App Store Version", value: "Version 1.2.3"),
-
-              const SizedBox(
-                height: 100,
-              ), // Padding bawah agar tidak tertutup navbar
-            ],
+                const SizedBox(height: 100),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+}
 
-  // Widget Helper untuk Judul Section (misal: "App appearance")
-  Widget _buildSectionHeader(String title) {
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  const _SectionHeader(this.title);
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          color: Colors.black,
-        ),
-      ),
+      padding: const EdgeInsets.only(bottom: AppSpacing.md),
+      child: Text(title, style: Theme.of(context).textTheme.titleLarge),
     );
   }
+}
 
-  // Widget Helper untuk Baris dengan Switch
-  Widget _buildSwitchTile({
-    required String title,
-    required String subtitle,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-  }) {
+class _SwitchTile extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _SwitchTile({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 16, color: Colors.black87),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color:
-                        Colors.blueGrey[300], // Warna teks deskripsi agak pudar
-                  ),
-                ),
+                Text(title, style: theme.textTheme.titleMedium),
+                const SizedBox(height: 2),
+                Text(subtitle, style: theme.textTheme.bodySmall),
               ],
             ),
           ),
-          Transform.scale(
-            scale: 0.9,
-            child: Switch(
-              value: value,
-              onChanged: onChanged,
-              activeColor: Colors.white,
-              activeTrackColor:
-                  Colors.black, // Hitam saat aktif (sesuai tema minimalis)
-              inactiveThumbColor: Colors.white,
-              inactiveTrackColor: const Color(0xFFE0E0E0), // Abu-abu saat mati
-            ),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+            activeColor: AppColors.brand,
+            activeTrackColor: AppColors.brandSoft,
           ),
         ],
       ),
     );
   }
+}
 
-  // Widget Helper untuk Info Text (Car ID, Version)
-  Widget _buildInfoRow({required String title, required String value}) {
+class _InfoRow extends StatelessWidget {
+  final String title;
+  final String value;
+  const _InfoRow({required this.title, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 16, color: Colors.black87),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 14,
-            color: Color(0xFF638CA5), // Warna biru keabu-abuan sesuai gambar
-          ),
-        ),
+        Text(title, style: theme.textTheme.titleMedium),
+        const SizedBox(height: 2),
+        Text(value, style: theme.textTheme.bodyMedium),
       ],
     );
   }

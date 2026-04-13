@@ -15,12 +15,16 @@ static const char *kMethodListInstalled = "listInstalled";
 static const char *kMethodUninstall = "uninstallFlatpak";
 static const char *kMethodUpdate = "updateFlatpak";
 static const char *kMethodEnsureRemote = "ensureRemote";
+static const char *kMethodRefreshAppstream = "refreshAppstream";
 static const char *kEventsChannelName = "com.pens.flatpak/installer_events";
 
 static const char *kFlatpakRemote = "penshub";
 static const char *kFlatpakRepoUrl = "https://repo.agl-store.cyou";
 static const char *kFlatpakGpgUrl = "https://repo.agl-store.cyou/public.gpg";
 static const char *kGpgTmpPath = "/tmp/penshub.gpg";
+
+static const char *kFlathubRemote = "flathub";
+static const char *kFlathubRepoUrl = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 
 static FlEventChannel *g_events_channel = nullptr;
 
@@ -266,6 +270,43 @@ static gchar *ensure_penshub_remote()
     return nullptr;        // success
 }
 
+// ---------------- ensureFlathub helper ----------------
+// Adds the Flathub remote if not already present. Simpler than PensHub
+// because Flathub uses a .flatpakrepo file that bundles GPG info.
+// Returns nullptr on success, or an error string (must g_free).
+static gchar *ensure_flathub_remote()
+{
+    // 1. Check if flathub remote already exists
+    const char *list_argv[] = {"flatpak", "remote-list", "--user", nullptr};
+    gchar *list_out = nullptr;
+    spawn_and_capture(list_argv, &list_out, nullptr, nullptr, nullptr);
+
+    gboolean exists = list_out && (strstr(list_out, kFlathubRemote) != nullptr);
+    g_free(list_out);
+
+    if (exists)
+        return nullptr; // already set up
+
+    // 2. Add remote — the .flatpakrepo URL bundles the GPG key
+    const char *add_argv[] = {
+        "flatpak", "remote-add", "--user", "--if-not-exists",
+        kFlathubRemote, kFlathubRepoUrl, nullptr};
+    gint add_status = -1;
+    gchar *add_err = nullptr;
+    gboolean add_ok = spawn_and_capture(add_argv, nullptr, &add_err, &add_status, nullptr);
+
+    if (!add_ok || add_status != 0)
+    {
+        gchar *msg = g_strdup_printf("Failed to add remote '%s' (exit %d): %s",
+                                     kFlathubRemote, add_status,
+                                     add_err ? add_err : "unknown error");
+        g_free(add_err);
+        return msg;
+    }
+    g_free(add_err);
+    return nullptr;
+}
+
 // ---------------- Method Handler ----------------
 static void method_call_cb(FlMethodChannel *channel,
                            FlMethodCall *method_call,
@@ -277,27 +318,50 @@ static void method_call_cb(FlMethodChannel *channel,
     const gchar *method = fl_method_call_get_name(method_call);
 
     // ---- ensureRemote() -> {added: bool, error: string?} ----
+    // Sets up BOTH penshub and flathub remotes so the user can switch
+    // sources without manual flatpak configuration.
     if (g_strcmp0(method, kMethodEnsureRemote) == 0)
     {
-        // Check if remote already existed before setup
+        // Check if penshub already existed before setup
         const char *list_argv[] = {"flatpak", "remote-list", "--user", nullptr};
         gchar *list_out = nullptr;
         spawn_and_capture(list_argv, &list_out, nullptr, nullptr, nullptr);
-        gboolean already_existed = list_out && (strstr(list_out, kFlatpakRemote) != nullptr);
+        gboolean penshub_existed = list_out && (strstr(list_out, kFlatpakRemote) != nullptr);
         g_free(list_out);
 
-        gchar *err_msg = ensure_penshub_remote();
+        // Set up PensHub (GPG key + remote)
+        gchar *penshub_err = ensure_penshub_remote();
+
+        // Set up Flathub (.flatpakrepo — simpler, no separate GPG download)
+        gchar *flathub_err = ensure_flathub_remote();
+
+        // Combine errors if both failed
+        gchar *combined_err = nullptr;
+        if (penshub_err && flathub_err)
+        {
+            combined_err = g_strdup_printf("penshub: %s | flathub: %s", penshub_err, flathub_err);
+            g_free(penshub_err);
+            g_free(flathub_err);
+        }
+        else if (penshub_err)
+        {
+            combined_err = penshub_err;
+        }
+        else if (flathub_err)
+        {
+            combined_err = flathub_err;
+        }
 
         FlValue *result = fl_value_new_map();
         fl_value_set_string_take(result, "added",
-            fl_value_new_bool(!already_existed && err_msg == nullptr));
+            fl_value_new_bool(!penshub_existed && combined_err == nullptr));
         fl_value_set_string_take(result, "alreadyExists",
-            fl_value_new_bool(already_existed));
+            fl_value_new_bool(penshub_existed));
 
-        if (err_msg)
+        if (combined_err)
         {
-            fl_value_set_string_take(result, "error", fl_value_new_string(err_msg));
-            g_free(err_msg);
+            fl_value_set_string_take(result, "error", fl_value_new_string(combined_err));
+            g_free(combined_err);
         }
         else
         {
@@ -306,6 +370,29 @@ static void method_call_cb(FlMethodChannel *channel,
 
         g_autoptr(FlMethodResponse) resp =
             FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+        fl_method_call_respond(method_call, resp, nullptr);
+        return;
+    }
+
+    // ---- refreshAppstream() ----
+    // Fires `flatpak update --appstream --user <remote>` for both penshub
+    // and flathub in the background. Non-blocking — returns immediately
+    // while the updates run asynchronously. Called on every app launch so
+    // the driver never needs to touch a terminal.
+    if (g_strcmp0(method, kMethodRefreshAppstream) == 0)
+    {
+        const char *pens_argv[] = {
+            "flatpak", "update", "--appstream", "--user", kFlatpakRemote, nullptr};
+        g_spawn_async(nullptr, (gchar **)pens_argv, nullptr,
+                      G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, nullptr);
+
+        const char *flat_argv[] = {
+            "flatpak", "update", "--appstream", "--user", kFlathubRemote, nullptr};
+        g_spawn_async(nullptr, (gchar **)flat_argv, nullptr,
+                      G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, nullptr);
+
+        g_autoptr(FlMethodResponse) resp =
+            FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(TRUE)));
         fl_method_call_respond(method_call, resp, nullptr);
         return;
     }
@@ -388,6 +475,9 @@ static void method_call_cb(FlMethodChannel *channel,
     }
 
     // ---- launchFlatpak(appId) ----
+    // Launches the app and watches the child PID. When the child exits,
+    // we re-present our GTK window and restore cursor focus so the
+    // driver doesn't get stuck with an invisible cursor.
     if (g_strcmp0(method, kMethodLaunch) == 0)
     {
         const gchar *app_id = nullptr;
@@ -409,20 +499,20 @@ static void method_call_cb(FlMethodChannel *channel,
             return;
         }
 
-        gchar *argv[] = {(gchar *)"flatpak", (gchar *)"run", (gchar *)app_id, nullptr};
-        GError *error = nullptr;
+        // Launch via `setsid flatpak run --user <id>` so the child gets
+        // its own session and doesn't inherit/disrupt our EGL display
+        // connection. This prevents "Lost connection to device".
+        gchar *cmd = g_strdup_printf(
+            "setsid flatpak run --user %s &", app_id);
+        int ret = system(cmd);
+        g_free(cmd);
 
-        gboolean ok = g_spawn_async(
-            nullptr, argv, nullptr, G_SPAWN_SEARCH_PATH,
-            nullptr, nullptr, nullptr, &error);
-
-        if (!ok)
+        if (ret != 0)
         {
-            const gchar *msg = error ? error->message : "Failed to launch";
-            g_autoptr(FlMethodResponse) resp = FL_METHOD_RESPONSE(fl_method_error_response_new("LAUNCH_FAILED", msg, nullptr));
-            if (error)
-                g_error_free(error);
-            fl_method_call_respond(method_call, resp, nullptr);
+            fl_method_call_respond(method_call,
+                FL_METHOD_RESPONSE(fl_method_error_response_new(
+                    "LAUNCH_FAILED", "system() returned non-zero", nullptr)),
+                nullptr);
             return;
         }
 

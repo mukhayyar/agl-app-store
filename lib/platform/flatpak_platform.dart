@@ -55,4 +55,12 @@ class FlatpakPlatform {
   static Future<void> update(String appId) async {
     await _channel.invokeMethod('updateFlatpak', {'appId': appId});
   }
+
+  /// Refreshes the appstream cache for both penshub and flathub remotes
+  /// in the background. Non-blocking — the native side spawns the processes
+  /// and returns immediately. Call this on every app launch so the catalog
+  /// stays fresh without the driver ever touching a terminal.
+  static Future<void> refreshAppstream() async {
+    await _channel.invokeMethod('refreshAppstream');
+  }
 }

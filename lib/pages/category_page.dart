@@ -11,381 +11,237 @@ import 'app_detail_page.dart';
 class CategoriesPage extends StatelessWidget {
   const CategoriesPage({super.key});
 
-  static const _categories = <_CategoryDef>[
-    _CategoryDef(
-      uiName: 'Navigation',
-      apiCategory: 'Science',
-      icon: Icons.map_outlined,
-      gradient: [Color(0xFF22C55E), Color(0xFF14B8A6)],
-    ),
-    _CategoryDef(
-      uiName: 'Music',
-      apiCategory: 'AudioVideo',
-      icon: Icons.headphones_rounded,
-      gradient: [Color(0xFFEC4899), Color(0xFFF97316)],
-    ),
-    _CategoryDef(
-      uiName: 'Tools',
-      apiCategory: 'Development',
-      icon: Icons.build_rounded,
-      gradient: [Color(0xFFF59E0B), Color(0xFFEF4444)],
-    ),
-    _CategoryDef(
-      uiName: 'Games',
-      apiCategory: 'Game',
-      icon: Icons.sports_esports_rounded,
-      gradient: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
-    ),
-    _CategoryDef(
-      uiName: 'Productivity',
-      apiCategory: 'Office',
-      icon: Icons.calendar_today_rounded,
-      gradient: [Color(0xFF0EA5E9), Color(0xFF14B8A6)],
-    ),
-    _CategoryDef(
-      uiName: 'Utilities',
-      apiCategory: 'Utility',
-      icon: Icons.layers_rounded,
-      gradient: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-    ),
-    _CategoryDef(
-      uiName: 'Entertainment',
-      apiCategory: 'AudioVideo',
-      icon: Icons.movie_creation_rounded,
-      gradient: [Color(0xFF1F2937), Color(0xFF374151)],
-    ),
-    _CategoryDef(
-      uiName: 'Communication',
-      apiCategory: 'Network',
-      icon: Icons.chat_bubble_rounded,
-      gradient: [Color(0xFFF97316), Color(0xFFEC4899)],
-    ),
+  static const _cats = <_Cat>[
+    _Cat('Navigation', 'Science', Icons.map_rounded,
+        [Color(0xFF00E676), Color(0xFF00D4FF)], 'Maps & GPS'),
+    _Cat('Music', 'AudioVideo', Icons.headphones_rounded,
+        [Color(0xFFFF6B9D), Color(0xFFFF9F43)], 'Players & streaming'),
+    _Cat('Tools', 'Development', Icons.build_rounded,
+        [Color(0xFFFF9F43), Color(0xFFFF5252)], 'Dev & system tools'),
+    _Cat('Games', 'Game', Icons.sports_esports_rounded,
+        [Color(0xFFA29BFE), Color(0xFFFF6B9D)], 'Play on the go'),
+    _Cat('Productivity', 'Office', Icons.calendar_today_rounded,
+        [Color(0xFF00D4FF), Color(0xFF00E676)], 'Office & planning'),
+    _Cat('Utilities', 'Utility', Icons.layers_rounded,
+        [Color(0xFF6C5CE7), Color(0xFFA29BFE)], 'Handy helpers'),
+    _Cat('Entertainment', 'AudioVideo', Icons.movie_creation_rounded,
+        [Color(0xFFE040FB), Color(0xFF7C4DFF)], 'Movies & media'),
+    _Cat('Communication', 'Network', Icons.chat_bubble_rounded,
+        [Color(0xFFFF9F43), Color(0xFFFF6B9D)], 'Chat & connect'),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: context.colors.bg,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
-            AppSpacing.pageGutter,
-            AppSpacing.lg,
-            AppSpacing.pageGutter,
-            0,
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final crossAxisCount = constraints.maxWidth > 600 ? 3 : 2;
-              return CustomScrollView(
-                slivers: [
-                  SliverToBoxAdapter(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Browse',
-                          style: Theme.of(context).textTheme.displaySmall,
-                        ),
-                        const SizedBox(height: AppSpacing.xs),
-                        Text(
-                          'Find apps by category',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: AppSpacing.xxl),
-                      ],
-                    ),
+              AppSpacing.pageH, AppSpacing.lg, AppSpacing.pageH, 0),
+          child: LayoutBuilder(builder: (context, box) {
+            final cols = box.maxWidth > 700 ? 3 : box.maxWidth > 380 ? 2 : 1;
+            return CustomScrollView(
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Browse',
+                          style: Theme.of(context).textTheme.displaySmall),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text('Find apps by category',
+                          style: Theme.of(context).textTheme.bodyMedium),
+                      const SizedBox(height: AppSpacing.xxl),
+                    ],
                   ),
-                  SliverGrid(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: crossAxisCount,
-                      crossAxisSpacing: AppSpacing.lg,
-                      mainAxisSpacing: AppSpacing.lg,
-                      childAspectRatio: 0.95,
-                    ),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, i) => _CategoryCard(def: _categories[i]),
-                      childCount: _categories.length,
-                    ),
+                ),
+                SliverGrid(
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    crossAxisSpacing: AppSpacing.md,
+                    mainAxisSpacing: AppSpacing.md,
+                    childAspectRatio: 1.0,
                   ),
-                  const SliverToBoxAdapter(
-                    child: SizedBox(height: AppSpacing.huge),
+                  delegate: SliverChildBuilderDelegate(
+                    (_, i) => _CatCard(cat: _cats[i]),
+                    childCount: _cats.length,
                   ),
-                ],
-              );
-            },
-          ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.huge)),
+              ],
+            );
+          }),
         ),
       ),
     );
   }
 }
 
-class _CategoryDef {
-  final String uiName;
-  final String apiCategory;
+class _Cat {
+  final String ui;
+  final String api;
   final IconData icon;
-  final List<Color> gradient;
-
-  const _CategoryDef({
-    required this.uiName,
-    required this.apiCategory,
-    required this.icon,
-    required this.gradient,
-  });
+  final List<Color> grad;
+  final String sub;
+  const _Cat(this.ui, this.api, this.icon, this.grad, this.sub);
 }
 
-class _CategoryCard extends StatelessWidget {
-  final _CategoryDef def;
-  const _CategoryCard({required this.def});
+class _CatCard extends StatelessWidget {
+  final _Cat cat;
+  const _CatCard({required this.cat});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => CategoryResultsPage(
-                uiName: def.uiName,
-                apiCategory: def.apiCategory,
+    return GestureDetector(
+      onTap: () => Navigator.push(context, MaterialPageRoute(
+          builder: (_) => _ResultsPage(ui: cat.ui, api: cat.api))),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppSpacing.rXl),
+          gradient: LinearGradient(
+            colors: cat.grad,
+            begin: Alignment.topLeft, end: Alignment.bottomRight,
+          ),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              right: -20, top: -20,
+              child: Container(
+                width: 90, height: 90,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.12),
+                ),
               ),
             ),
-          );
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-            gradient: LinearGradient(
-              colors: def.gradient,
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+            Padding(
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(AppSpacing.sm),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(AppSpacing.rSm),
+                    ),
+                    child: Icon(cat.icon, color: Colors.white, size: 24),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(cat.ui, style: const TextStyle(
+                          color: Colors.white, fontSize: 16,
+                          fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 2),
+                      Text(cat.sub, style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.70),
+                          fontSize: 11)),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            boxShadow: [
-              BoxShadow(
-                color: def.gradient.last.withValues(alpha: 0.30),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              Positioned(
-                right: -25,
-                top: -25,
-                child: Container(
-                  width: 110,
-                  height: 110,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.18),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: -10,
-                bottom: -20,
-                child: Container(
-                  width: 70,
-                  height: 70,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.10),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(AppSpacing.xl),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(AppSpacing.md),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.22),
-                        borderRadius:
-                            BorderRadius.circular(AppSpacing.radiusMd),
-                      ),
-                      child: Icon(def.icon, color: Colors.white, size: 28),
-                    ),
-                    Text(
-                      def.uiName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+          ],
         ),
       ),
     );
   }
 }
 
-// --- RESULTS PAGE ---
-class CategoryResultsPage extends StatelessWidget {
-  final String uiName;
-  final String apiCategory;
-
-  const CategoryResultsPage({
-    super.key,
-    required this.uiName,
-    required this.apiCategory,
-  });
+class _ResultsPage extends StatelessWidget {
+  final String ui;
+  final String api;
+  const _ResultsPage({required this.ui, required this.api});
 
   @override
   Widget build(BuildContext context) {
     final repo = context.read<FlatpakRepository>();
-
     return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: Text(uiName),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
+      backgroundColor: context.colors.bg,
+      appBar: AppBar(title: Text(ui)),
       body: StreamBuilder<List<FlatpakPackage>>(
-        stream: repo.fetchByCategory(apiCategory),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting &&
-              !snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
+        stream: repo.fetchByCategory(api),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+            return const Center(
+                child: CircularProgressIndicator(color: AppColors.brand));
           }
-
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
+          if (snap.hasError) {
+            return Center(child: Text('Error: ${snap.error}'));
           }
-
-          final apps = snapshot.data ?? [];
+          final apps = snap.data ?? [];
           if (apps.isEmpty) {
-            if (snapshot.connectionState == ConnectionState.done) {
-              return Center(
-                child: Text(
-                  'No apps found in this category',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              );
-            }
-            return const Center(child: CircularProgressIndicator());
+            return snap.connectionState == ConnectionState.done
+                ? Center(child: Text('No apps in this category',
+                    style: Theme.of(context).textTheme.bodyMedium))
+                : const Center(
+                    child: CircularProgressIndicator(color: AppColors.brand));
           }
-
           return ListView.separated(
-            padding: const EdgeInsets.all(AppSpacing.pageGutter),
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.all(AppSpacing.pageH),
             itemCount: apps.length,
-            separatorBuilder: (c, i) => const SizedBox(height: AppSpacing.md),
-            itemBuilder: (context, index) {
-              final app = apps[index];
+            separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.md),
+            itemBuilder: (_, i) {
+              final app = apps[i];
+              final grad = AppColors.gradientFor(app.id);
               return RepaintBoundary(
                 key: ValueKey(app.id),
-                child: _CategoryAppCard(app: app),
+                child: GestureDetector(
+                  onTap: () => Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => AppDetailPage(package: app))),
+                  child: Container(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: context.colors.card,
+                      borderRadius: BorderRadius.circular(AppSpacing.rLg),
+                      border: Border.all(color: context.colors.border),
+                    ),
+                    child: Row(children: [
+                      Container(
+                        width: 48, height: 48,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(AppSpacing.rSm),
+                          gradient: LinearGradient(colors: grad),
+                        ),
+                        child: Center(
+                          child: app.icon != null
+                              ? CachedNetworkImage(
+                                  imageUrl: app.icon!, width: 28, height: 28,
+                                  memCacheWidth: 56, fit: BoxFit.contain,
+                                  placeholder: (_, __) => const Icon(
+                                      Icons.apps_rounded, color: Colors.white),
+                                  errorWidget: (_, __, ___) => const Icon(
+                                      Icons.apps_rounded, color: Colors.white))
+                              : const Icon(Icons.apps_rounded, color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.lg),
+                      Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(app.name, maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 2),
+                          Text(app.summary ?? '', maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall),
+                        ],
+                      )),
+                      Icon(Icons.chevron_right_rounded,
+                          color: context.colors.textT),
+                    ]),
+                  ),
+                ),
               );
             },
           );
         },
-      ),
-    );
-  }
-}
-
-class _CategoryAppCard extends StatelessWidget {
-  final FlatpakPackage app;
-  const _CategoryAppCard({required this.app});
-
-  @override
-  Widget build(BuildContext context) {
-    final gradient = AppColors.gradientFor(app.id);
-
-    return Material(
-      color: AppColors.surface,
-      borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        onTap: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => AppDetailPage(package: app)),
-          );
-        },
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-            border: Border.all(color: AppColors.borderSubtle),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                  gradient: LinearGradient(
-                    colors: gradient,
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                child: Center(
-                  child: app.icon != null
-                      ? CachedNetworkImage(
-                          imageUrl: app.icon!,
-                          width: 32,
-                          height: 32,
-                          memCacheWidth: 64,
-                          fit: BoxFit.contain,
-                          placeholder: (_, __) => const Icon(
-                            Icons.apps_rounded,
-                            color: Colors.white,
-                          ),
-                          errorWidget: (_, __, ___) => const Icon(
-                            Icons.apps_rounded,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.apps_rounded, color: Colors.white),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.lg),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      app.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      app.summary ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: AppColors.textTertiary,
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
