@@ -12,11 +12,12 @@ class SystemMonitor extends ChangeNotifier {
   double rxBytesPerSec = 0;
   double txBytesPerSec = 0;
 
-  // History (60 samples)
-  final List<double> cpuHistory = List.filled(60, 0, growable: true);
-  final List<double> ramHistory = List.filled(60, 0, growable: true);
-  final List<double> rxHistory = List.filled(60, 0, growable: true);
-  final List<double> txHistory = List.filled(60, 0, growable: true);
+  // History (60 samples) — new list created on every tick so Flutter
+  // widget reconciliation sees a different object and triggers rebuild.
+  List<double> cpuHistory = List.filled(60, 0);
+  List<double> ramHistory = List.filled(60, 0);
+  List<double> rxHistory = List.filled(60, 0);
+  List<double> txHistory = List.filled(60, 0);
 
   Timer? _timer;
 
@@ -93,7 +94,7 @@ class SystemMonitor extends ChangeNotifier {
     } catch (_) {
       cpu = 0;
     }
-    _addHistory(cpuHistory, cpu);
+    cpuHistory = _pushHistory(cpuHistory, cpu);
   }
 
   Future<void> _readRam() async {
@@ -118,7 +119,7 @@ class SystemMonitor extends ChangeNotifier {
       ramUsedMb = 0;
     }
     final pct = ramTotalMb > 0 ? (ramUsedMb / ramTotalMb) * 100 : 0.0;
-    _addHistory(ramHistory, pct);
+    ramHistory = _pushHistory(ramHistory, pct);
   }
 
   int _parseMeminfoKb(String line) {
@@ -165,8 +166,8 @@ class SystemMonitor extends ChangeNotifier {
       rxBytesPerSec = 0;
       txBytesPerSec = 0;
     }
-    _addHistory(rxHistory, rxBytesPerSec);
-    _addHistory(txHistory, txBytesPerSec);
+    rxHistory = _pushHistory(rxHistory, rxBytesPerSec);
+    txHistory = _pushHistory(txHistory, txBytesPerSec);
   }
 
   Future<List<int>> _sumNetBytes() async {
@@ -191,9 +192,11 @@ class SystemMonitor extends ChangeNotifier {
     return [totalRx, totalTx];
   }
 
-  void _addHistory(List<double> history, double value) {
-    history.removeAt(0);
-    history.add(value);
+  /// Returns a new list with the oldest sample dropped and [value] appended.
+  /// Creating a new list (not mutating in-place) is required so that Flutter's
+  /// widget reconciliation detects the change and rebuilds the chart widget.
+  List<double> _pushHistory(List<double> history, double value) {
+    return [...history.skip(1), value];
   }
 
   @override
