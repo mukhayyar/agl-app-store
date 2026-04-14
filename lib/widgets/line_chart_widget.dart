@@ -18,6 +18,7 @@ class LineChartWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClipRect(
       child: CustomPaint(
+        size: Size.infinite,
         painter: _LineChartPainter(
           data: data,
           maxValue: maxValue > 0 ? maxValue : 1,
@@ -44,34 +45,43 @@ class _LineChartPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (data.isEmpty) return;
+    if (data.isEmpty || size.width <= 0 || size.height <= 0) return;
 
     final w = size.width;
     final h = size.height;
+    // Reserve padding so line/dot aren't clipped at the edges
+    const topPad = 4.0;
+    const botPad = 4.0;
+    final plotH = (h - topPad - botPad).clamp(1.0, h);
 
-    // Grid lines
+    // Background grid (4 horizontal lines at 25%/50%/75%/100%)
     final gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.06)
+      ..color = color.withValues(alpha: 0.08)
       ..strokeWidth = 0.5;
-    for (int i = 1; i <= 3; i++) {
-      final y = h - (i / 4) * h;
+    for (int i = 0; i <= 4; i++) {
+      final y = topPad + (i / 4) * plotH;
       canvas.drawLine(Offset(0, y), Offset(w, y), gridPaint);
     }
 
-    // Build points
+    // Build points (inside padded region)
+    final n = data.length;
     final points = <Offset>[];
-    for (int i = 0; i < data.length; i++) {
-      final x = (i / (data.length - 1)) * w;
-      final y = h - (data[i].clamp(0, maxValue) / maxValue) * h;
+    for (int i = 0; i < n; i++) {
+      final x = n == 1 ? w / 2 : (i / (n - 1)) * w;
+      final v = data[i].clamp(0, maxValue).toDouble();
+      final y = topPad + (1 - v / maxValue) * plotH;
       points.add(Offset(x, y));
     }
 
-    // Gradient fill
-    final fillPath = Path()..moveTo(points.first.dx, h);
+    if (points.isEmpty) return;
+
+    // Gradient fill beneath the line
+    final fillBaseline = h - botPad;
+    final fillPath = Path()..moveTo(points.first.dx, fillBaseline);
     for (final pt in points) {
       fillPath.lineTo(pt.dx, pt.dy);
     }
-    fillPath.lineTo(points.last.dx, h);
+    fillPath.lineTo(points.last.dx, fillBaseline);
     fillPath.close();
 
     canvas.drawPath(
@@ -80,11 +90,11 @@ class _LineChartPainter extends CustomPainter {
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [color.withOpacity(0.35), color.withOpacity(0.0)],
+          colors: [color.withValues(alpha: 0.45), color.withValues(alpha: 0.0)],
         ).createShader(Rect.fromLTWH(0, 0, w, h)),
     );
 
-    // Line
+    // Line itself (brighter + thicker for visibility on small displays)
     final linePath = Path()..moveTo(points.first.dx, points.first.dy);
     for (int i = 1; i < points.length; i++) {
       linePath.lineTo(points[i].dx, points[i].dy);
@@ -94,21 +104,21 @@ class _LineChartPainter extends CustomPainter {
       Paint()
         ..color = color
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
+        ..strokeWidth = 2.5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round,
     );
 
     // Last-point dot
     if (showDot && points.isNotEmpty) {
-      canvas.drawCircle(points.last, 3, Paint()..color = color);
+      canvas.drawCircle(points.last, 4, Paint()..color = color);
       canvas.drawCircle(
         points.last,
-        3,
+        4,
         Paint()
-          ..color = Colors.white.withOpacity(0.8)
+          ..color = Colors.white.withValues(alpha: 0.9)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1,
+          ..strokeWidth = 1.2,
       );
     }
   }
