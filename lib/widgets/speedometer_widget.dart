@@ -79,7 +79,7 @@ class _SpeedometerWidgetState extends State<SpeedometerWidget>
                     _animation.value.toStringAsFixed(0),
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 52,
+                      fontSize: 72,
                       fontWeight: FontWeight.bold,
                       letterSpacing: -2,
                     ),
@@ -88,7 +88,7 @@ class _SpeedometerWidgetState extends State<SpeedometerWidget>
                     'km/h',
                     style: TextStyle(
                       color: Color(0xFF00D4FF),
-                      fontSize: 14,
+                      fontSize: 19,
                       fontWeight: FontWeight.w500,
                       letterSpacing: 2,
                     ),
@@ -238,7 +238,7 @@ class _SpeedometerPainter extends CustomPainter {
       final labelR = radius - 48;
       textPainter.text = TextSpan(
         text: '$spd',
-        style: const TextStyle(color: Colors.white54, fontSize: 10),
+        style: const TextStyle(color: Colors.white54, fontSize: 14),
       );
       textPainter.layout();
       final dx = center.dx + labelR * cos(angle) - textPainter.width / 2;

@@ -358,7 +358,7 @@ class _AppDetailPageState extends State<AppDetailPage> {
                                   progress != null
                                       ? 'Installing $progress%' : 'Installing...',
                                   style: const TextStyle(
-                                      color: Colors.white, fontSize: 16,
+                                      color: Colors.white, fontSize: 22,
                                       fontWeight: FontWeight.w700),
                                 ),
                               ])
@@ -376,7 +376,7 @@ class _AppDetailPageState extends State<AppDetailPage> {
                                   style: TextStyle(
                                       color: installed
                                           ? context.colors.textP : Colors.white,
-                                      fontSize: 16, fontWeight: FontWeight.w700),
+                                      fontSize: 22, fontWeight: FontWeight.w700),
                                 ),
                               ]),
                       ),

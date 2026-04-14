@@ -62,12 +62,15 @@ class AglApp extends StatelessWidget {
                 final mq = MediaQuery.of(context);
                 final isPortrait = mq.size.height > mq.size.width;
                 final shortSide = isPortrait ? mq.size.width : mq.size.height;
-                // Scale up if short side is narrow (< 600 logical px)
+                // Scale up if short side is narrow (< 600 logical px).
+                // 1.6x on very narrow portrait for 7" 1080x1920 automotive
+                // displays — combined with the 40%-larger base fonts in
+                // AppTypography, this makes everything readable at arm's length.
                 double scaleFactor = 1.0;
                 if (shortSide < 600) {
-                  scaleFactor = 1.35;
+                  scaleFactor = 1.6;
                 } else if (shortSide < 800) {
-                  scaleFactor = 1.2;
+                  scaleFactor = 1.3;
                 }
                 if (scaleFactor == 1.0) return child!;
                 return MediaQuery(
@@ -186,7 +189,7 @@ class _ShellState extends State<_Shell> {
                       Text(
                         item.label,
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: 14,
                           fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                           color: active ? AppColors.brand : AppColors.textTertiary,
                         ),
@@ -755,7 +758,7 @@ class _FeaturedCard extends StatelessWidget {
                       ),
                       child: const Text('FEATURED',
                           style: TextStyle(
-                            color: Colors.white, fontSize: 9,
+                            color: Colors.white, fontSize: 13,
                             fontWeight: FontWeight.w800,
                             letterSpacing: 1.2,
                           )),
@@ -769,14 +772,14 @@ class _FeaturedCard extends StatelessWidget {
                     Text(package.name,
                         maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            color: Colors.white, fontSize: 18,
+                            color: Colors.white, fontSize: 26,
                             fontWeight: FontWeight.w800)),
                     const SizedBox(height: 4),
                     Text(package.summary ?? '',
                         maxLines: 2, overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                             color: Colors.white.withValues(alpha: 0.85),
-                            fontSize: 13, height: 1.35)),
+                            fontSize: 18, height: 1.35)),
                   ],
                 ),
               ],

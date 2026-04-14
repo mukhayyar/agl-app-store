@@ -134,12 +134,12 @@ class _CatCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(cat.ui, style: const TextStyle(
-                          color: Colors.white, fontSize: 16,
+                          color: Colors.white, fontSize: 22,
                           fontWeight: FontWeight.w800)),
                       const SizedBox(height: 2),
                       Text(cat.sub, style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.70),
-                          fontSize: 11)),
+                          fontSize: 15)),
                     ],
                   ),
                 ],

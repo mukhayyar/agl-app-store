@@ -74,7 +74,7 @@ class MonitorPage extends StatelessWidget {
                           const SizedBox(width: 4),
                           Text('LIVE', style: TextStyle(
                             color: AppColors.success,
-                            fontSize: 10, fontWeight: FontWeight.w700,
+                            fontSize: 14, fontWeight: FontWeight.w700,
                             letterSpacing: 1,
                           )),
                         ],
@@ -224,7 +224,7 @@ class _GaugeCard extends StatelessWidget {
       child: Column(
         children: [
           Text(title, style: TextStyle(
-            color: context.colors.textT, fontSize: 11,
+            color: context.colors.textT, fontSize: 16,
             fontWeight: FontWeight.w700, letterSpacing: 1.5,
           )),
           const SizedBox(height: AppSpacing.md),
@@ -268,13 +268,13 @@ class _DiskCard extends StatelessWidget {
           Row(
             children: [
               Text('DISK', style: TextStyle(
-                color: context.colors.textT, fontSize: 11,
+                color: context.colors.textT, fontSize: 16,
                 fontWeight: FontWeight.w700, letterSpacing: 1.5,
               )),
               const Spacer(),
               Text('${pct.toStringAsFixed(0)}%',
                   style: TextStyle(
-                    color: color, fontSize: 14, fontWeight: FontWeight.w700,
+                    color: color, fontSize: 20, fontWeight: FontWeight.w700,
                   )),
             ],
           ),
@@ -330,7 +330,7 @@ class _NetworkCard extends StatelessWidget {
           Row(
             children: [
               Text('NETWORK', style: TextStyle(
-                color: context.colors.textT, fontSize: 11,
+                color: context.colors.textT, fontSize: 16,
                 fontWeight: FontWeight.w700, letterSpacing: 1.5,
               )),
               const Spacer(),
@@ -412,10 +412,10 @@ class _Badge extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(label, style: TextStyle(
-              color: color, fontSize: 10, fontWeight: FontWeight.w700)),
+              color: color, fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(width: 4),
           Text(value, style: TextStyle(
-              color: context.colors.textP, fontSize: 11)),
+              color: context.colors.textP, fontSize: 16)),
         ],
       ),
     );
