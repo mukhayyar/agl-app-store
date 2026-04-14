@@ -65,11 +65,14 @@ class SystemMonitor extends ChangeNotifier {
   }
 
   Future<void> _tick() async {
+    // Use individual try/catch so one failing reading doesn't skip notify.
+    // Also wait for all, even those that throw, so history lists stay in
+    // sync (each tick must append exactly one sample to each history).
     await Future.wait([
-      _readCpu(),
-      _readRam(),
-      _readDisk(),
-      _readNetwork(),
+      _readCpu().catchError((_) {}),
+      _readRam().catchError((_) {}),
+      _readDisk().catchError((_) {}),
+      _readNetwork().catchError((_) {}),
     ]);
     notifyListeners();
   }
