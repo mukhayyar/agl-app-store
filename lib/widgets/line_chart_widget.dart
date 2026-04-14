@@ -16,16 +16,26 @@ class LineChartWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRect(
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: _LineChartPainter(
-          data: data,
-          maxValue: maxValue > 0 ? maxValue : 1,
-          color: color,
-          showDot: showDot,
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Force CustomPaint to fill its parent — without this,
+        // CustomPaint(size: Size.zero) collapses to zero and the chart
+        // is invisible. LayoutBuilder gives us the actual finite size
+        // from the parent SizedBox/Expanded/etc.
+        final w = constraints.maxWidth.isFinite ? constraints.maxWidth : 200.0;
+        final h = constraints.maxHeight.isFinite ? constraints.maxHeight : 60.0;
+        return ClipRect(
+          child: CustomPaint(
+            size: Size(w, h),
+            painter: _LineChartPainter(
+              data: data,
+              maxValue: maxValue > 0 ? maxValue : 1,
+              color: color,
+              showDot: showDot,
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -49,21 +59,20 @@ class _LineChartPainter extends CustomPainter {
 
     final w = size.width;
     final h = size.height;
-    // Reserve padding so line/dot aren't clipped at the edges
     const topPad = 4.0;
     const botPad = 4.0;
     final plotH = (h - topPad - botPad).clamp(1.0, h);
 
-    // Background grid (4 horizontal lines at 25%/50%/75%/100%)
+    // Background grid (5 horizontal lines at 0%/25%/50%/75%/100%)
     final gridPaint = Paint()
-      ..color = color.withValues(alpha: 0.08)
-      ..strokeWidth = 0.5;
+      ..color = color.withValues(alpha: 0.18)
+      ..strokeWidth = 0.8;
     for (int i = 0; i <= 4; i++) {
       final y = topPad + (i / 4) * plotH;
       canvas.drawLine(Offset(0, y), Offset(w, y), gridPaint);
     }
 
-    // Build points (inside padded region)
+    // Build points inside padded region
     final n = data.length;
     final points = <Offset>[];
     for (int i = 0; i < n; i++) {
@@ -94,7 +103,7 @@ class _LineChartPainter extends CustomPainter {
         ).createShader(Rect.fromLTWH(0, 0, w, h)),
     );
 
-    // Line itself (brighter + thicker for visibility on small displays)
+    // The line itself
     final linePath = Path()..moveTo(points.first.dx, points.first.dy);
     for (int i = 1; i < points.length; i++) {
       linePath.lineTo(points[i].dx, points[i].dy);
