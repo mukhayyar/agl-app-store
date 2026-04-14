@@ -26,17 +26,42 @@ class FlatpakPlatform {
   static const _gpgTmpPath = '/tmp/penshub.gpg';
 
   // ── Install events stream ───────────────────────────────────
+  /// Returns a stream of install progress events from the native plugin.
+  /// On flutter-auto (AGL) the native plugin is not available, so we return
+  /// an empty stream. The stream wraps receiveBroadcastStream with a
+  /// handleError to silently swallow MissingPluginException that fires
+  /// asynchronously when .listen() is called.
   static Stream<dynamic> installEvents() {
-    if (_useProcessFallback) {
-      // No event stream in fallback mode
-      return const Stream.empty();
-    }
+    if (_useProcessFallback) return const Stream.empty();
     try {
-      return _events.receiveBroadcastStream();
-    } on MissingPluginException {
+      return _events.receiveBroadcastStream().handleError(
+        (error) {
+          // Swallow MissingPluginException — flutter-auto doesn't have the
+          // native plugin. All subsequent calls will use Process.run fallback.
+          _useProcessFallback = true;
+        },
+        test: (error) => error is MissingPluginException,
+      );
+    } catch (_) {
       _useProcessFallback = true;
       return const Stream.empty();
     }
+  }
+
+  // ── Exit the app (for kiosk/embedded mode) ──────────────────
+  /// Forces the flutter-auto process to exit cleanly. Used by the UI
+  /// close button on embedded targets where the app would otherwise
+  /// hog the compositor and require SSH + systemctl stop to kill.
+  static Future<void> exitApp() async {
+    // Try to cleanly exit; SIGTERM our own process group
+    try {
+      await Process.run('systemctl', ['stop', 'agl-app-flutter@agl_app_store']);
+    } catch (_) {
+      // Fallback: just exit the dart VM
+    }
+    // If systemctl stop didn't kill us (e.g. running as root from terminal),
+    // exit the process directly
+    exit(0);
   }
 
   // ── Helper: run a process and return stdout ─────────────────
