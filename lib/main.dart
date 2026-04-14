@@ -21,7 +21,12 @@ import 'theme/app_colors.dart';
 import 'theme/app_spacing.dart';
 import 'theme/app_theme.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Probe the native flatpak plugin once. On flutter-auto (AGL) this sets
+  // _useProcessFallback=true so EventChannel.receiveBroadcastStream is never
+  // invoked (which would log MissingPluginException internally).
+  await FlatpakPlatform.init();
   runApp(const AglApp());
 }
 

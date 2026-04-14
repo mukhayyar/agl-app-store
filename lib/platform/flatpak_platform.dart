@@ -17,35 +17,56 @@ class FlatpakPlatform {
   static const _channel = MethodChannel('com.pens.flatpak/installer');
   static const _events = EventChannel('com.pens.flatpak/installer_events');
 
-  /// Whether we've detected the native plugin is unavailable
-  static bool _useProcessFallback = false;
+  /// Whether we've detected the native plugin is unavailable.
+  /// Starts as `true` (assume no native plugin) and flips to `false` only
+  /// if init() successfully probes the channel. This prevents EventChannel
+  /// from ever calling invokeMethod('listen') on flutter-auto, which would
+  /// log a spurious MissingPluginException even if the result is caught.
+  static bool _useProcessFallback = true;
+  static bool _initialized = false;
 
   static const _penshubRemote = 'penshub';
   static const _penshubUrl = 'https://repo.agl-store.cyou';
   static const _penshubGpgUrl = 'https://repo.agl-store.cyou/public.gpg';
   static const _gpgTmpPath = '/tmp/penshub.gpg';
 
+  // ── Init: probe the native plugin synchronously at app startup ──
+  /// Probes the native MethodChannel ONCE at app startup. If the plugin
+  /// responds, we use it. Otherwise we permanently fall back to dart:io
+  /// Process.run. Call this from main() BEFORE runApp() so that
+  /// installEvents() can check the flag before calling receiveBroadcastStream.
+  static Future<void> init() async {
+    if (_initialized) return;
+    _initialized = true;
+    try {
+      // Probe with a harmless method — if the native plugin exists it responds,
+      // otherwise MissingPluginException fires synchronously here (caught).
+      final ok = await _channel.invokeMethod<bool>('isInstalled', {
+        'appId': 'probe.nonexistent',
+      });
+      // Any response (even false) means the native plugin is present
+      _useProcessFallback = false;
+      // Suppress unused variable warning
+      if (ok == true || ok == false || ok == null) { /* ok */ }
+    } on MissingPluginException {
+      _useProcessFallback = true;
+    } catch (_) {
+      // Plugin exists but the probe threw something else — plugin is OK
+      _useProcessFallback = false;
+    }
+  }
+
   // ── Install events stream ───────────────────────────────────
   /// Returns a stream of install progress events from the native plugin.
   /// On flutter-auto (AGL) the native plugin is not available, so we return
-  /// an empty stream. The stream wraps receiveBroadcastStream with a
-  /// handleError to silently swallow MissingPluginException that fires
-  /// asynchronously when .listen() is called.
+  /// Stream.empty() BEFORE ever touching receiveBroadcastStream — avoiding
+  /// the internal Flutter log of MissingPluginException.
   static Stream<dynamic> installEvents() {
     if (_useProcessFallback) return const Stream.empty();
-    try {
-      return _events.receiveBroadcastStream().handleError(
-        (error) {
-          // Swallow MissingPluginException — flutter-auto doesn't have the
-          // native plugin. All subsequent calls will use Process.run fallback.
-          _useProcessFallback = true;
-        },
-        test: (error) => error is MissingPluginException,
-      );
-    } catch (_) {
-      _useProcessFallback = true;
-      return const Stream.empty();
-    }
+    return _events.receiveBroadcastStream().handleError(
+      (error) => _useProcessFallback = true,
+      test: (error) => error is MissingPluginException,
+    );
   }
 
   // ── Exit the app (for kiosk/embedded mode) ──────────────────
