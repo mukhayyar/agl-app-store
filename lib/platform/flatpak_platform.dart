@@ -65,13 +65,34 @@ class FlatpakPlatform {
   }
 
   // ── Helper: run a process and return stdout ─────────────────
+  /// Runs a command, falling back to absolute paths if PATH is not set
+  /// (systemd services on AGL may have a minimal environment).
   static Future<String> _run(String cmd, List<String> args) async {
-    final result = await Process.run(cmd, args);
+    ProcessResult result;
+    try {
+      result = await Process.run(cmd, args);
+    } on ProcessException {
+      // Command not found in PATH — try known absolute paths
+      final absPath = await _resolveAbsolute(cmd);
+      if (absPath == null) {
+        throw Exception('$cmd: command not found in PATH or standard locations');
+      }
+      result = await Process.run(absPath, args);
+    }
     if (result.exitCode != 0) {
       final stderr = result.stderr.toString().trim();
-      throw Exception('$cmd ${args.join(' ')} failed (${ result.exitCode}): $stderr');
+      throw Exception('$cmd ${args.join(' ')} failed (${result.exitCode}): $stderr');
     }
     return result.stdout.toString().trim();
+  }
+
+  /// Resolves a command name to an absolute path by checking standard locations.
+  static Future<String?> _resolveAbsolute(String cmd) async {
+    for (final prefix in ['/usr/bin/', '/bin/', '/usr/local/bin/', '/usr/sbin/', '/sbin/']) {
+      final path = '$prefix$cmd';
+      if (await File(path).exists()) return path;
+    }
+    return null;
   }
 
   // ── Ensure remote ───────────────────────────────────────────
