@@ -280,6 +280,21 @@ class _ShellState extends State<_Shell> {
                       size: 20, color: AppColors.textPrimary),
                 ),
               ),
+              const SizedBox(width: AppSpacing.sm),
+              GestureDetector(
+                onTap: () => _confirmExit(context),
+                child: Container(
+                  width: 44, height: 44,
+                  decoration: BoxDecoration(
+                    color: AppColors.danger.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(AppSpacing.rMd),
+                    border: Border.all(
+                        color: AppColors.danger.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.close_rounded,
+                      size: 22, color: AppColors.danger),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -532,6 +547,41 @@ class _ShellState extends State<_Shell> {
   void _openDetail(BuildContext context, FlatpakPackage pkg) {
     Navigator.push(context,
         MaterialPageRoute(builder: (_) => AppDetailPage(package: pkg)));
+  }
+
+  /// Shows a confirmation dialog then exits the app (kills flutter-auto).
+  /// Useful on embedded targets where the app runs in kiosk mode and
+  /// otherwise requires SSH + `systemctl stop` to kill.
+  void _confirmExit(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: context.colors.card,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppSpacing.rLg)),
+        title: const Text('Close App Store?'),
+        content: const Text(
+            'This will stop the AGL App Store service and return to the '
+            'compositor. Re-open it from the home launcher.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              FlatpakPlatform.exitApp();
+            },
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
