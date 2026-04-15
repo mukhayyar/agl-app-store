@@ -18,6 +18,7 @@ import 'services/system_monitor.dart';
 import 'services/gps_service.dart';
 import 'services/api_benchmark.dart';
 import 'services/theme_service.dart';
+import 'services/user_log.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_spacing.dart';
 import 'theme/app_theme.dart';
@@ -114,9 +115,14 @@ class _ShellState extends State<_Shell> {
     _scrollCtl.addListener(_onScroll);
     // Auto-setup remotes + refresh appstream on every launch.
     // Both are fire-and-forget — non-blocking background processes.
-    FlatpakPlatform.ensureRemote().then((_) {
+    // Remote reconciliation is Flathub-first, then PensHub with GPG
+    // self-heal; see FlatpakPlatform.ensureRemotes for the policy.
+    FlatpakPlatform.ensureRemotes().then((result) {
+      debugPrint('[FLATPAK] ensureRemotes result=$result');
       FlatpakPlatform.refreshAppstream().catchError((_) {});
-    }).catchError((_) {});
+    }).catchError((e) {
+      debugPrint('[FLATPAK] ensureRemotes threw: $e');
+    });
   }
 
   void _onScroll() {
@@ -187,8 +193,13 @@ class _ShellState extends State<_Shell> {
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
                     final wasHome = _tab == 0;
+                    UserLog.tap('nav.tab',
+                        {'to': item.label, 'index': i, 'from': _tab});
                     setState(() => _tab = i);
-                    if (i == 0 && wasHome) bloc.add(const RefreshAll());
+                    if (i == 0 && wasHome) {
+                      UserLog.tap('nav.tab.refresh-home');
+                      bloc.add(const RefreshAll());
+                    }
                   },
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 180),
@@ -290,7 +301,10 @@ class _ShellState extends State<_Shell> {
                 ),
               ),
               Pressable(
-                onTap: () => _showSearch(context, bloc),
+                onTap: () {
+                  UserLog.tap('header.search-open');
+                  _showSearch(context, bloc);
+                },
                 child: Container(
                   height: 44,
                   padding: const EdgeInsets.symmetric(
@@ -322,7 +336,10 @@ class _ShellState extends State<_Shell> {
               const SizedBox(width: AppSpacing.sm),
               // Close App — vehicle-friendly: door-exit icon + label
               Pressable(
-                onTap: () => _confirmExit(context),
+                onTap: () {
+                  UserLog.tap('header.exit-open');
+                  _confirmExit(context);
+                },
                 child: Container(
                   height: 44,
                   padding: const EdgeInsets.symmetric(
@@ -381,11 +398,16 @@ class _ShellState extends State<_Shell> {
       buildWhen: (p, c) {
         if (p.runtimeType != c.runtimeType) return true;
         if (p is FlatpakLoaded && c is FlatpakLoaded) {
+          // Install-state fields (installingIds, installProgress,
+          // installPhase) are consumed per-tile via BlocSelector in
+          // `_buildAppTile`, so we intentionally omit them here. That
+          // stops a 200ms progress tick from tearing down the entire
+          // CustomScrollView (featured row + up to 300 list tiles).
+          // `installed` stays because the installed-count header and
+          // other coarse widgets depend on it.
           return p.items != c.items ||
               p.hasMore != c.hasMore ||
               p.installed != c.installed ||
-              p.installingIds != c.installingIds ||
-              p.installProgress != c.installProgress ||
               p.isLoading != c.isLoading;
         }
         return true;
@@ -404,7 +426,10 @@ class _ShellState extends State<_Shell> {
         if (state is FlatpakError) {
           return Center(
             child: TextButton.icon(
-              onPressed: () => bloc.add(const RefreshAll()),
+              onPressed: () {
+                UserLog.tap('home.error.retry');
+                bloc.add(const RefreshAll());
+              },
               icon: const Icon(Icons.refresh_rounded),
               label: const Text('Tap to retry'),
             ),
@@ -467,7 +492,11 @@ class _ShellState extends State<_Shell> {
                           key: ValueKey('f_${pkg.id}'),
                           delay: Duration(milliseconds: 40 * i),
                           child: Pressable(
-                            onTap: () => _openDetail(context, pkg),
+                            onTap: () {
+                              UserLog.tap('home.featured.open',
+                                  {'id': pkg.flatpakId, 'slot': i});
+                              _openDetail(context, pkg);
+                            },
                             child: _FeaturedCard(package: pkg, width: cardW),
                           ),
                         );
@@ -572,7 +601,10 @@ class _ShellState extends State<_Shell> {
                 decoration: const InputDecoration(
                     hintText: 'App name...', prefixIcon: Icon(Icons.search_rounded)),
                 onSubmitted: (q) {
-                  bloc.add(LoadFirstPage(query: q.trim().isEmpty ? null : q));
+                  final clean = q.trim();
+                  UserLog.tap('home.search.submit',
+                      {'query': clean.isEmpty ? '(cleared)' : clean});
+                  bloc.add(LoadFirstPage(query: clean.isEmpty ? null : clean));
                   Navigator.pop(ctx);
                 },
               ),
@@ -592,18 +624,38 @@ class _ShellState extends State<_Shell> {
     final id = FlatpakRepository.normalizeFlatpakId(pkg.flatpakId);
     return RepaintBoundary(
       key: ValueKey(pkg.id),
-      child: _AppTile(
-        package: pkg,
-        isInstalled: state.installed.contains(id),
-        isInstalling: state.installingIds.contains(id),
-        installProgress: state.installProgress[id],
-        onTap: () => _openDetail(context, pkg),
-        onInstall: () {
-          bloc.add(InstallApp(pkg.flatpakId));
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Downloading ${pkg.name}...')));
-        },
-        onUninstall: () => bloc.add(UninstallApp(pkg.flatpakId)),
+      // Per-tile selector so only this tile rebuilds when its own
+      // install state changes. The selector's equality collapses to
+      // (isInstalled, isInstalling, progress) scoped to this id, so
+      // a progress tick for app X doesn't touch tile Y.
+      child: BlocSelector<FlatpakBloc, FlatpakState, _TileInstall>(
+        selector: (s) => s is FlatpakLoaded
+            ? _TileInstall(
+                installed: s.installed.contains(id),
+                installing: s.installingIds.contains(id),
+                progress: s.installProgress[id],
+              )
+            : const _TileInstall(),
+        builder: (_, t) => _AppTile(
+          package: pkg,
+          isInstalled: t.installed,
+          isInstalling: t.installing,
+          installProgress: t.progress,
+          onTap: () {
+            UserLog.tap('home.tile.open', {'id': pkg.flatpakId});
+            _openDetail(context, pkg);
+          },
+          onInstall: () {
+            UserLog.tap('home.tile.install', {'id': pkg.flatpakId});
+            bloc.add(InstallApp(pkg.flatpakId));
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Downloading ${pkg.name}...')));
+          },
+          onUninstall: () {
+            UserLog.tap('home.tile.uninstall', {'id': pkg.flatpakId});
+            bloc.add(UninstallApp(pkg.flatpakId));
+          },
+        ),
       ),
     );
   }
@@ -629,7 +681,10 @@ class _ShellState extends State<_Shell> {
             'compositor. Re-open it from the home launcher.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () {
+              UserLog.tap('exit.cancel');
+              Navigator.pop(ctx);
+            },
             child: const Text('Cancel'),
           ),
           ElevatedButton(
@@ -638,6 +693,7 @@ class _ShellState extends State<_Shell> {
               foregroundColor: Colors.white,
             ),
             onPressed: () {
+              UserLog.tap('exit.confirm');
               Navigator.pop(ctx);
               FlatpakPlatform.exitApp();
             },
@@ -673,7 +729,11 @@ class _SourceToggle extends StatelessWidget {
           for (final s in AppSource.values)
             Expanded(
               child: Pressable(
-                onTap: () => onChanged(s),
+                onTap: () {
+                  UserLog.tap('source.switch',
+                      {'to': s.label, 'from': current.label});
+                  onChanged(s);
+                },
                 pressedScale: 0.96,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
@@ -880,6 +940,32 @@ class _FeaturedCard extends StatelessWidget {
 // =====================================================================
 // APP TILE
 // =====================================================================
+
+/// Minimal value type for the per-tile BlocSelector — identity-compared
+/// on three tile-local fields so neighboring tiles' progress ticks don't
+/// cause this tile to rebuild.
+@immutable
+class _TileInstall {
+  final bool installed;
+  final bool installing;
+  final int? progress;
+  const _TileInstall({
+    this.installed = false,
+    this.installing = false,
+    this.progress,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      other is _TileInstall &&
+      other.installed == installed &&
+      other.installing == installing &&
+      other.progress == progress;
+
+  @override
+  int get hashCode => Object.hash(installed, installing, progress);
+}
+
 class _AppTile extends StatelessWidget {
   final FlatpakPackage package;
   final bool isInstalled;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/theme_service.dart';
+import '../services/user_log.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/pressable.dart';
@@ -63,7 +64,10 @@ class _SettingsPageState extends State<SettingsPage> {
                   title: 'Dark mode',
                   subtitle: 'Switch between light and dark theme',
                   value: themeSvc.isDark,
-                  onChanged: (val) => themeSvc.setDark(val),
+                  onChanged: (val) {
+                    UserLog.tap('settings.dark-mode', {'value': val});
+                    themeSvc.setDark(val);
+                  },
                 ),
                 const SizedBox(height: AppSpacing.xxl),
 
@@ -73,7 +77,10 @@ class _SettingsPageState extends State<SettingsPage> {
                   title: 'Auto-update apps',
                   subtitle: 'Automatically update apps when connected to Wi-Fi',
                   value: _autoUpdate,
-                  onChanged: (val) => setState(() => _autoUpdate = val),
+                  onChanged: (val) {
+                    UserLog.tap('settings.auto-update', {'value': val});
+                    setState(() => _autoUpdate = val);
+                  },
                 ),
                 const SizedBox(height: AppSpacing.xxl),
 
@@ -83,19 +90,28 @@ class _SettingsPageState extends State<SettingsPage> {
                   title: 'Location access',
                   subtitle: 'Allow apps to access your location',
                   value: _locationAccess,
-                  onChanged: (val) => setState(() => _locationAccess = val),
+                  onChanged: (val) {
+                    UserLog.tap('settings.perm.location', {'value': val});
+                    setState(() => _locationAccess = val);
+                  },
                 ),
                 _SwitchTile(
                   title: 'Contacts access',
                   subtitle: 'Allow apps to access your contacts',
                   value: _contactsAccess,
-                  onChanged: (val) => setState(() => _contactsAccess = val),
+                  onChanged: (val) {
+                    UserLog.tap('settings.perm.contacts', {'value': val});
+                    setState(() => _contactsAccess = val);
+                  },
                 ),
                 _SwitchTile(
                   title: 'Camera access',
                   subtitle: 'Allow apps to access your camera',
                   value: _cameraAccess,
-                  onChanged: (val) => setState(() => _cameraAccess = val),
+                  onChanged: (val) {
+                    UserLog.tap('settings.perm.camera', {'value': val});
+                    setState(() => _cameraAccess = val);
+                  },
                 ),
                 const SizedBox(height: AppSpacing.xxl),
 
@@ -198,10 +214,13 @@ class _AboutLink extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Pressable(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const AboutPage()),
-      ),
+      onTap: () {
+        UserLog.tap('settings.about-open');
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AboutPage()),
+        );
+      },
       pressedScale: 0.98,
       child: Container(
         padding: const EdgeInsets.all(AppSpacing.md),

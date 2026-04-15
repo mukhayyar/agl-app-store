@@ -6,6 +6,7 @@ import '../bloc/flatpak_bloc.dart';
 import '../data/flatpak_repository.dart';
 import '../models/flatpak_package.dart';
 import '../platform/flatpak_platform.dart';
+import '../services/user_log.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
@@ -42,6 +43,17 @@ class _AppDetailPageState extends State<AppDetailPage> {
   late FlatpakPackage _pkg;
   bool _fetching = false;
 
+  static String _installLabel(InstallPhase? phase, int? progress) {
+    final hasPct = progress != null && progress > 0;
+    return switch (phase) {
+      InstallPhase.downloading =>
+        hasPct ? 'Downloading $progress%' : 'Downloading…',
+      InstallPhase.installing => 'Installing…',
+      // Phase unknown (native plugin path on desktop): keep prior wording.
+      null => hasPct ? 'Installing $progress%' : 'Installing…',
+    };
+  }
+
   @override
   void initState() {
     super.initState();
@@ -66,32 +78,16 @@ class _AppDetailPageState extends State<AppDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<FlatpakBloc, FlatpakState>(
-      buildWhen: (p, c) {
-        if (p.runtimeType != c.runtimeType) return true;
-        if (p is FlatpakLoaded && c is FlatpakLoaded) {
-          final id = AppDetailPage.normalizeFlatpakId(_pkg.flatpakId);
-          return p.installed.contains(id) != c.installed.contains(id) ||
-              p.installingIds.contains(id) != c.installingIds.contains(id) ||
-              p.installProgress[id] != c.installProgress[id];
-        }
-        return true;
-      },
-      builder: (context, state) {
-        bool installed = false;
-        bool installing = false;
-        int? progress;
-        if (state is FlatpakLoaded) {
-          final id = AppDetailPage.normalizeFlatpakId(_pkg.flatpakId);
-          installed = state.installed.contains(id);
-          installing = state.installingIds.contains(id);
-          progress = state.installProgress[id];
-        }
+    // Hoisted out of any BlocBuilder — the hero, meta pills, about, and
+    // screenshots are entirely pkg-driven. Only the bottom install CTA
+    // needs bloc state, so only it subscribes. A 200ms install-progress
+    // tick no longer relayouts the whole page (which was relayouting a
+    // 220 px tall CachedNetworkImage-backed hero + gradient + screenshots
+    // ListView every frame).
+    final grad = AppColors.gradientFor(_pkg.id);
+    final id = AppDetailPage.normalizeFlatpakId(_pkg.flatpakId);
 
-        final grad = AppColors.gradientFor(_pkg.id);
-        final id = AppDetailPage.normalizeFlatpakId(_pkg.flatpakId);
-
-        return Scaffold(
+    return Scaffold(
           backgroundColor: context.colors.bg,
           extendBodyBehindAppBar: true,
           appBar: AppBar(
@@ -100,7 +96,10 @@ class _AppDetailPageState extends State<AppDetailPage> {
             leading: Padding(
               padding: const EdgeInsets.all(AppSpacing.sm),
               child: GestureDetector(
-                onTap: () => Navigator.pop(context),
+                onTap: () {
+                  UserLog.tap('detail.back', {'id': _pkg.flatpakId});
+                  Navigator.pop(context);
+                },
                 child: Container(
                   decoration: BoxDecoration(
                     color: context.colors.card.withValues(alpha: 0.80),
@@ -315,7 +314,11 @@ class _AppDetailPageState extends State<AppDetailPage> {
                       itemBuilder: (_, i) => RepaintBoundary(
                         key: ValueKey('ss_$i'),
                         child: GestureDetector(
-                          onTap: () => _openScreenshotViewer(context, i),
+                          onTap: () {
+                            UserLog.tap('detail.screenshot.open',
+                                {'id': _pkg.flatpakId, 'index': i});
+                            _openScreenshotViewer(context, i);
+                          },
                           child: Stack(
                             children: [
                               ClipRRect(
@@ -368,98 +371,139 @@ class _AppDetailPageState extends State<AppDetailPage> {
             ),
           ),
 
-          // BOTTOM ACTION
-          bottomNavigationBar: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.pageH),
-              child: SizedBox(
-                height: AppSpacing.touchLg,
-                child: Material(
-                  borderRadius: BorderRadius.circular(AppSpacing.rLg),
-                  child: Ink(
-                    decoration: BoxDecoration(
+          // BOTTOM ACTION — narrowly scoped BlocBuilder. Only this
+          // widget rebuilds on install-state changes for this pkg.
+          bottomNavigationBar: BlocBuilder<FlatpakBloc, FlatpakState>(
+            buildWhen: (p, c) {
+              if (p.runtimeType != c.runtimeType) return true;
+              if (p is FlatpakLoaded && c is FlatpakLoaded) {
+                return p.installed.contains(id) != c.installed.contains(id) ||
+                    p.installingIds.contains(id) !=
+                        c.installingIds.contains(id) ||
+                    p.installProgress[id] != c.installProgress[id] ||
+                    p.installPhase[id] != c.installPhase[id];
+              }
+              return true;
+            },
+            builder: (context, state) {
+              bool installed = false;
+              bool installing = false;
+              int? progress;
+              InstallPhase? phase;
+              if (state is FlatpakLoaded) {
+                installed = state.installed.contains(id);
+                installing = state.installingIds.contains(id);
+                progress = state.installProgress[id];
+                phase = state.installPhase[id];
+              }
+
+              return SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.pageH),
+                  child: SizedBox(
+                    height: AppSpacing.touchLg,
+                    child: Material(
                       borderRadius: BorderRadius.circular(AppSpacing.rLg),
-                      gradient: installed
-                          ? null
-                          : LinearGradient(colors: grad),
-                      color: installed ? context.colors.card : null,
-                      border: installed
-                          ? Border.all(color: context.colors.border)
-                          : null,
-                    ),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(AppSpacing.rLg),
-                      onTap: installing
-                          ? null
-                          : installed
-                              ? () => FlatpakPlatform.launch(id)
-                              : () => context.read<FlatpakBloc>().add(InstallApp(id)),
-                      child: Center(
-                        child: installing
-                            ? Row(mainAxisSize: MainAxisSize.min, children: [
-                                const SizedBox(width: 18, height: 18,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white)),
-                                const SizedBox(width: AppSpacing.md),
-                                Text(
-                                  progress != null
-                                      ? 'Installing $progress%' : 'Installing...',
-                                  style: const TextStyle(
-                                      color: Colors.white, fontSize: 22,
-                                      fontWeight: FontWeight.w700),
-                                ),
-                              ])
-                            : Row(mainAxisSize: MainAxisSize.min, children: [
-                                Icon(
-                                  installed
-                                      ? Icons.play_arrow_rounded
-                                      : Icons.download_rounded,
-                                  color: installed
-                                      ? context.colors.textP : Colors.white,
-                                  size: 22),
-                                const SizedBox(width: AppSpacing.sm),
-                                Text(
-                                  installed ? 'Launch' : 'Install',
-                                  style: TextStyle(
-                                      color: installed
-                                          ? context.colors.textP : Colors.white,
-                                      fontSize: 22, fontWeight: FontWeight.w700),
-                                ),
-                                if (!installed &&
-                                    _pkg.formattedDownloadSize != null) ...[
-                                  const SizedBox(width: AppSpacing.sm),
-                                  Container(
-                                    width: 4,
-                                    height: 4,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white
-                                          .withValues(alpha: 0.55),
-                                      shape: BoxShape.circle,
+                      child: Ink(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(AppSpacing.rLg),
+                          gradient: installed
+                              ? null
+                              : LinearGradient(colors: grad),
+                          color: installed ? context.colors.card : null,
+                          border: installed
+                              ? Border.all(color: context.colors.border)
+                              : null,
+                        ),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(AppSpacing.rLg),
+                          onTap: installing
+                              ? null
+                              : installed
+                                  ? () {
+                                      UserLog.tap('detail.launch',
+                                          {'id': id});
+                                      FlatpakPlatform.launch(id);
+                                    }
+                                  : () {
+                                      UserLog.tap('detail.install',
+                                          {'id': id});
+                                      context
+                                          .read<FlatpakBloc>()
+                                          .add(InstallApp(id));
+                                    },
+                          child: Center(
+                            child: installing
+                                ? Row(mainAxisSize: MainAxisSize.min, children: [
+                                    const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white)),
+                                    const SizedBox(width: AppSpacing.md),
+                                    Text(
+                                      _installLabel(phase, progress),
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w700),
                                     ),
-                                  ),
-                                  const SizedBox(width: AppSpacing.sm),
-                                  Text(
-                                    _pkg.formattedDownloadSize!,
-                                    style: TextStyle(
-                                      color: Colors.white
-                                          .withValues(alpha: 0.85),
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
+                                  ])
+                                : Row(mainAxisSize: MainAxisSize.min, children: [
+                                    Icon(
+                                        installed
+                                            ? Icons.play_arrow_rounded
+                                            : Icons.download_rounded,
+                                        color: installed
+                                            ? context.colors.textP
+                                            : Colors.white,
+                                        size: 22),
+                                    const SizedBox(width: AppSpacing.sm),
+                                    Text(
+                                      installed ? 'Launch' : 'Install',
+                                      style: TextStyle(
+                                          color: installed
+                                              ? context.colors.textP
+                                              : Colors.white,
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w700),
                                     ),
-                                  ),
-                                ],
-                              ]),
+                                    if (!installed &&
+                                        _pkg.formattedDownloadSize != null) ...[
+                                      const SizedBox(width: AppSpacing.sm),
+                                      Container(
+                                        width: 4,
+                                        height: 4,
+                                        decoration: BoxDecoration(
+                                          color:
+                                              Colors.white.withValues(alpha: 0.55),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: AppSpacing.sm),
+                                      Text(
+                                        _pkg.formattedDownloadSize!,
+                                        style: TextStyle(
+                                          color:
+                                              Colors.white.withValues(alpha: 0.85),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ]),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         );
-      },
-    );
   }
 
   void _openScreenshotViewer(BuildContext context, int initialIndex) {
@@ -516,7 +560,10 @@ class _ScreenshotViewerState extends State<_ScreenshotViewer> {
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: () => Navigator.of(context).maybePop(),
+              onTap: () {
+                UserLog.tap('screenshot-viewer.dismiss');
+                Navigator.of(context).maybePop();
+              },
             ),
           ),
           // Swipeable, pinch-zoom pages
@@ -532,6 +579,14 @@ class _ScreenshotViewerState extends State<_ScreenshotViewer> {
                 child: CachedNetworkImage(
                   imageUrl: widget.urls[i],
                   fit: BoxFit.contain,
+                  // Cap decode at 1280 px wide. Without this the Pi's
+                  // VideoCore VI decodes whatever dimensions the server
+                  // ships (often 2K+), which stalls the raster thread
+                  // for 3+ frames on each PageView swipe. 1280 covers
+                  // the native display with headroom for 4× pinch-zoom
+                  // scale without visible softening.
+                  memCacheWidth: 1280,
+                  maxWidthDiskCache: 1280,
                   placeholder: (_, __) => const Center(
                       child: CircularProgressIndicator(
                           color: Colors.white)),
@@ -584,7 +639,10 @@ class _ScreenshotViewerState extends State<_ScreenshotViewer> {
                   shape: const CircleBorder(),
                   child: InkWell(
                     customBorder: const CircleBorder(),
-                    onTap: () => Navigator.of(context).maybePop(),
+                    onTap: () {
+                UserLog.tap('screenshot-viewer.dismiss');
+                Navigator.of(context).maybePop();
+              },
                     child: const Padding(
                       padding: EdgeInsets.all(10),
                       child: Icon(Icons.close_rounded,

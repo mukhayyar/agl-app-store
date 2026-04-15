@@ -6,6 +6,7 @@ import '../bloc/flatpak_bloc.dart';
 import '../data/flatpak_repository.dart';
 import '../models/flatpak_package.dart';
 import '../platform/flatpak_platform.dart';
+import '../services/user_log.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
@@ -45,7 +46,11 @@ class _InstalledAppsPageState extends State<InstalledAppsPage> {
       listener: (_, state) {
         if (state is FlatpakLoaded) {
           final set = state.installed;
-          setState(() => _apps.removeWhere((a) => !set.contains(a.id)));
+          // `installed` is a set of normalized flatpak refs; the local
+          // list may carry either form depending on cache provenance,
+          // so treat absence from *both* forms as "uninstalled".
+          setState(() => _apps.removeWhere(
+              (a) => !set.contains(a.flatpakId) && !set.contains(a.id)));
         }
       },
       child: BlocBuilder<FlatpakBloc, FlatpakState>(
@@ -121,8 +126,12 @@ class _InstalledAppsPageState extends State<InstalledAppsPage> {
                                 (_, i) {
                                   final app = _apps[i];
                                   final grad = AppColors.gradientFor(app.id);
+                                  // Match against flatpakId since the bloc's
+                                  // uninstallingIds set stores normalized
+                                  // flatpak refs, not PensHub's internal id.
                                   final removing =
-                                      uninstalling.contains(app.id);
+                                      uninstalling.contains(app.flatpakId) ||
+                                          uninstalling.contains(app.id);
 
                                   return RepaintBoundary(
                                     key: ValueKey(app.id),
@@ -199,6 +208,8 @@ class _InstalledAppsPageState extends State<InstalledAppsPage> {
                                           // Launch
                                           GestureDetector(
                                             onTap: () async {
+                                              UserLog.tap('installed.launch',
+                                                  {'id': app.flatpakId});
                                               try {
                                                 await FlatpakPlatform.launch(
                                                     app.id);
@@ -230,9 +241,15 @@ class _InstalledAppsPageState extends State<InstalledAppsPage> {
                                           GestureDetector(
                                             onTap: removing
                                                 ? null
-                                                : () => context
-                                                    .read<FlatpakBloc>()
-                                                    .add(UninstallApp(app.id)),
+                                                : () {
+                                                    UserLog.tap(
+                                                        'installed.uninstall',
+                                                        {'id': app.flatpakId});
+                                                    context
+                                                        .read<FlatpakBloc>()
+                                                        .add(UninstallApp(
+                                                            app.flatpakId));
+                                                  },
                                             child: removing
                                                 ? const SizedBox(
                                                     width: 20, height: 20,

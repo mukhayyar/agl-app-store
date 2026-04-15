@@ -9,6 +9,11 @@ import '../models/app_source.dart';
 import '../models/flatpak_package.dart';
 import '../platform/flatpak_platform.dart';
 
+/// Phase of an in-flight install, used by the UI to show
+/// "Downloading…" vs "Installing…". Reported by the AGL dart fallback
+/// path; null on the desktop native plugin (which only emits %).
+enum InstallPhase { downloading, installing }
+
 /// =====================
 /// EVENTS
 /// =====================
@@ -64,9 +69,10 @@ class EnrichCurrentPage extends FlatpakEvent {
 class InstallProgressEvent extends FlatpakEvent {
   final String appId;
   final int percent;
-  const InstallProgressEvent(this.appId, this.percent);
+  final InstallPhase? phase;
+  const InstallProgressEvent(this.appId, this.percent, {this.phase});
   @override
-  List<Object?> get props => [appId, percent];
+  List<Object?> get props => [appId, percent, phase];
 }
 
 class _InstallFinished extends FlatpakEvent {
@@ -104,6 +110,7 @@ class FlatpakLoaded extends FlatpakState {
   final Set<String> installingIds;
   final Set<String> uninstallingIds;
   final Map<String, int> installProgress;
+  final Map<String, InstallPhase> installPhase;
 
   /// True while a transient, long-running refresh is underway on top of
   /// the currently-rendered data (e.g. catalog source switch). The UI
@@ -127,6 +134,7 @@ class FlatpakLoaded extends FlatpakState {
     this.installingIds = const {},
     this.uninstallingIds = const {},
     this.installProgress = const {},
+    this.installPhase = const {},
     this.isLoading = false,
     this.pendingSource,
   });
@@ -142,6 +150,7 @@ class FlatpakLoaded extends FlatpakState {
     Set<String>? installingIds,
     Set<String>? uninstallingIds,
     Map<String, int>? installProgress,
+    Map<String, InstallPhase>? installPhase,
     bool? isLoading,
     AppSource? pendingSource,
     bool clearPendingSource = false,
@@ -157,6 +166,7 @@ class FlatpakLoaded extends FlatpakState {
       installingIds: installingIds ?? this.installingIds,
       uninstallingIds: uninstallingIds ?? this.uninstallingIds,
       installProgress: installProgress ?? this.installProgress,
+      installPhase: installPhase ?? this.installPhase,
       isLoading: isLoading ?? this.isLoading,
       pendingSource:
           clearPendingSource ? null : (pendingSource ?? this.pendingSource),
@@ -175,6 +185,7 @@ class FlatpakLoaded extends FlatpakState {
     installingIds,
     uninstallingIds,
     installProgress,
+    installPhase,
     isLoading,
     pendingSource,
   ];
@@ -308,6 +319,9 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
         emit(
           s.copyWith(
             installProgress: {...s.installProgress, e.appId: e.percent},
+            installPhase: e.phase != null
+                ? {...s.installPhase, e.appId: e.phase!}
+                : s.installPhase,
           ),
         );
       },
@@ -379,6 +393,9 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
       final keepProgress = cur is FlatpakLoaded
           ? cur.installProgress
           : const <String, int>{};
+      final keepPhase = cur is FlatpakLoaded
+          ? cur.installPhase
+          : const <String, InstallPhase>{};
 
       emit(
         FlatpakLoaded(
@@ -390,6 +407,7 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
           installingIds: keepInstalling,
           uninstallingIds: keepUninstalling,
           installProgress: keepProgress,
+          installPhase: keepPhase,
           source: repo.currentSource,
           // isLoading: false, pendingSource: null (defaults)
         ),
@@ -403,15 +421,26 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
     /// ---------------------
     on<InstallApp>((e, emit) async {
       final s = state;
-      if (s is! FlatpakLoaded) return;
+      if (s is! FlatpakLoaded) {
+        debugPrint('[FLATPAK-BLOC] InstallApp dropped — state is not FlatpakLoaded');
+        return;
+      }
 
       final id = FlatpakRepository.normalizeFlatpakId(e.flatpakId);
-      if (s.installingIds.contains(id)) return;
+      debugPrint('[FLATPAK-BLOC] InstallApp raw="${e.flatpakId}" normalized="$id"');
+      if (s.installingIds.contains(id)) {
+        debugPrint('[FLATPAK-BLOC] InstallApp ignored — $id already installing');
+        return;
+      }
 
+      // Seed phase to 'downloading' immediately so the UI flips off
+      // the download CTA the moment the user taps Install — even
+      // before any progress event arrives from the platform layer.
       emit(
         s.copyWith(
           installingIds: {...s.installingIds, id},
           installProgress: {...s.installProgress, id: 0},
+          installPhase: {...s.installPhase, id: InstallPhase.downloading},
         ),
       );
 
@@ -419,7 +448,8 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
       // the native plugin's EventChannel (desktop) or from a synthetic
       // event emitted by the Dart fallback in FlatpakPlatform (AGL).
       // We only need to handle outright failure here.
-      repo.install(id).catchError((_) {
+      repo.install(id).catchError((err) {
+        debugPrint('[FLATPAK-BLOC] repo.install threw for $id: $err');
         add(_InstallFinished(id, false));
       });
     });
@@ -428,17 +458,54 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
     /// INSTALL FINISHED
     /// ---------------------
     on<_InstallFinished>((e, emit) async {
+      debugPrint('[FLATPAK-BLOC] _InstallFinished appId=${e.appId} '
+          'success=${e.success}');
       final s = state;
-      if (s is! FlatpakLoaded) return;
+      if (s is! FlatpakLoaded) {
+        debugPrint('[FLATPAK-BLOC] _InstallFinished dropped — state not FlatpakLoaded');
+        return;
+      }
 
-      final newInstalling = Set<String>.from(s.installingIds)..remove(e.appId);
-      final installed = await repo.installedIds();
+      final fromList = await repo.installedIds();
+      final hitFromList = fromList.contains(e.appId);
+      // Defensive union: if the install reported success, trust it and
+      // ensure the id is in the installed set even if listInstalled()
+      // is stale or normalizes ids slightly differently.
+      final installed = e.success ? {...fromList, e.appId} : fromList;
+
+      // Drop the specific event id AND self-heal any ghost entries: an
+      // installingId whose app is now in `installed` must be finished
+      // — even if the done event's id shape didn't match ours. This
+      // is what stops "Installing X" pills from sticking around after
+      // the install actually completed under a different id form.
+      final newInstalling = <String>{};
+      final newProgress = Map<String, int>.from(s.installProgress);
+      final newPhase = Map<String, InstallPhase>.from(s.installPhase);
+      newProgress.remove(e.appId);
+      newPhase.remove(e.appId);
+      for (final id in s.installingIds) {
+        if (id == e.appId) continue;
+        if (installed.contains(id)) {
+          debugPrint('[FLATPAK-BLOC] self-heal: dropping ghost installingId=$id '
+              '(now in installed set)');
+          newProgress.remove(id);
+          newPhase.remove(id);
+          continue;
+        }
+        newInstalling.add(id);
+      }
+
+      debugPrint('[FLATPAK-BLOC] _InstallFinished appId=${e.appId} '
+          'listInstalledHit=$hitFromList listSize=${fromList.length} '
+          'finalInstalledHit=${installed.contains(e.appId)} '
+          'installingIds: ${s.installingIds.length} → ${newInstalling.length}');
 
       emit(
         s.copyWith(
           installingIds: newInstalling,
           installed: installed,
-          installProgress: Map.of(s.installProgress)..remove(e.appId),
+          installProgress: newProgress,
+          installPhase: newPhase,
         ),
       );
     });
@@ -464,12 +531,41 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
     /// UNINSTALL FINISHED
     /// ---------------------
     on<_UninstallFinished>((e, emit) async {
+      debugPrint('[FLATPAK-BLOC] _UninstallFinished appId=${e.appId} '
+          'success=${e.success}');
       final s = state;
-      if (s is! FlatpakLoaded) return;
+      if (s is! FlatpakLoaded) {
+        debugPrint('[FLATPAK-BLOC] _UninstallFinished dropped — state not FlatpakLoaded');
+        return;
+      }
 
-      final newUninstalling = Set<String>.from(s.uninstallingIds)
-        ..remove(e.appId);
-      final installed = await repo.installedIds();
+      final fromList = await repo.installedIds();
+      // Defensive: trust a successful uninstall even if the id is still
+      // briefly returned by `flatpak list` due to caching.
+      final installed = e.success
+          ? fromList.difference({e.appId})
+          : fromList;
+
+      // Drop the event id AND self-heal any ghost uninstallingIds whose
+      // app is no longer in `installed`. This is what stops the dynamic
+      // island from showing "Uninstalling X" forever when flatpak
+      // actually removed the app under a slightly different id form
+      // than what we added to uninstallingIds (which happens when the
+      // UI dispatches app.id from cached PensHub metadata instead of
+      // app.flatpakId).
+      final newUninstalling = <String>{};
+      for (final id in s.uninstallingIds) {
+        if (id == e.appId) continue;
+        if (!installed.contains(id)) {
+          debugPrint('[FLATPAK-BLOC] self-heal: dropping ghost uninstallingId=$id '
+              '(no longer in installed set)');
+          continue;
+        }
+        newUninstalling.add(id);
+      }
+
+      debugPrint('[FLATPAK-BLOC] _UninstallFinished appId=${e.appId} '
+          'uninstallingIds: ${s.uninstallingIds.length} → ${newUninstalling.length}');
 
       emit(s.copyWith(uninstallingIds: newUninstalling, installed: installed));
     });
@@ -492,6 +588,11 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
             final step = m['step'] as int?;
             final total = m['total'] as int?;
             final p = m['percent'] as int;
+            final phase = switch (m['phase']) {
+              'downloading' => InstallPhase.downloading,
+              'installing' => InstallPhase.installing,
+              _ => null,
+            };
 
             int finalPercent;
 
@@ -501,7 +602,7 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
               finalPercent = p.clamp(0, 100);
             }
 
-            add(InstallProgressEvent(appId, finalPercent));
+            add(InstallProgressEvent(appId, finalPercent, phase: phase));
             return;
           }
 
@@ -512,12 +613,19 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
             // Fall back to both if we can't tell (idempotent).
             final ok = m['status'] == 0;
             final s = state;
+            debugPrint('[FLATPAK-BLOC] done event appId=$appId ok=$ok '
+                'stateType=${s.runtimeType}');
             if (s is FlatpakLoaded) {
               if (s.uninstallingIds.contains(appId)) {
+                debugPrint('[FLATPAK-BLOC] routing done → _UninstallFinished');
                 add(_UninstallFinished(appId, ok));
               } else if (s.installingIds.contains(appId)) {
+                debugPrint('[FLATPAK-BLOC] routing done → _InstallFinished');
                 add(_InstallFinished(appId, ok));
               } else {
+                debugPrint('[FLATPAK-BLOC] done for $appId not in either set — '
+                    'firing safety-net both. installingIds=${s.installingIds} '
+                    'uninstallingIds=${s.uninstallingIds}');
                 // Safety net: fire both so nothing is left hanging if
                 // the state was transiently out of sync.
                 add(_InstallFinished(appId, ok));
