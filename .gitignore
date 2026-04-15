@@ -33,6 +33,12 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Pub lockfile — must NOT be tracked. Bitbake's
+# `flutter pub get --enforce-lockfile` in `do_archive_pub_cache` fails
+# whenever the committed lock disagrees with the build host's
+# package_config / pub-cache. Let bitbake regenerate it.
+pubspec.lock
+
 # Symbolication related
 app.*.symbols
 
