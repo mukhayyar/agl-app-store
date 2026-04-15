@@ -16,6 +16,13 @@ class FlatpakPackage {
   final String? bugtracker;
   final List<String> categories;
 
+  /// PensHub-only: app has been verified by PensHub. False / null on Flathub.
+  final bool isVerified;
+
+  /// PensHub-only: ISO timestamp after which the app should be considered
+  /// expired (e.g. signing key rotation deadline). Null when not applicable.
+  final DateTime? expiresAt;
+
   const FlatpakPackage({
     required this.id,
     required this.flatpakId,
@@ -31,6 +38,8 @@ class FlatpakPackage {
     this.homepage,
     this.bugtracker,
     this.categories = const [],
+    this.isVerified = false,
+    this.expiresAt,
   });
 
   // Pre-compiled RegExp — avoid re-creation per call
@@ -151,10 +160,33 @@ class FlatpakPackage {
       developerName: json['developer_name']?.toString(),
       version: json['version']?.toString(),
       license: json['project_license']?.toString(),
+      downloadSize: json['download_size']?.toString(),
       screenshots: _readStringList(json['screenshots']),
       homepage: json['homepage']?.toString(),
       categories: _readStringList(json['categories']),
+      isVerified: json['is_verified'] == true,
+      expiresAt: _parseDate(json['expires_at']),
     );
+  }
+
+  /// Human-readable size string ("127 MB", "1.2 GB"). Parses the stored
+  /// [downloadSize] as bytes. Returns null when unavailable.
+  String? get formattedDownloadSize {
+    if (downloadSize == null || downloadSize!.isEmpty) return null;
+    final bytes = int.tryParse(downloadSize!) ??
+        double.tryParse(downloadSize!)?.round();
+    if (bytes == null || bytes <= 0) return null;
+    return _formatBytes(bytes);
+  }
+
+  static String _formatBytes(int bytes) {
+    const kb = 1024;
+    const mb = 1024 * kb;
+    const gb = 1024 * mb;
+    if (bytes >= gb) return '${(bytes / gb).toStringAsFixed(1)} GB';
+    if (bytes >= mb) return '${(bytes / mb).toStringAsFixed(bytes >= 10 * mb ? 0 : 1)} MB';
+    if (bytes >= kb) return '${(bytes / kb).toStringAsFixed(0)} KB';
+    return '$bytes B';
   }
 
   // --------------------------------------------------
@@ -175,6 +207,8 @@ class FlatpakPackage {
     'homepage': homepage,
     'bugtracker': bugtracker,
     'categories': categories,
+    'is_verified': isVerified,
+    'expires_at': expiresAt?.toIso8601String(),
   };
 
   // --------------------------------------------------
@@ -199,7 +233,17 @@ class FlatpakPackage {
       homepage: map['homepage']?.toString(),
       bugtracker: map['bugtracker']?.toString(),
       categories: _readStringList(map['categories']),
+      isVerified: map['is_verified'] == true,
+      expiresAt: _parseDate(map['expires_at']),
     );
+  }
+
+  static DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    final s = v.toString();
+    if (s.isEmpty) return null;
+    return DateTime.tryParse(s);
   }
 
   // --------------------------------------------------

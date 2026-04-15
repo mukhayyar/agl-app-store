@@ -13,6 +13,7 @@ import 'pages/installed_apps_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/monitor_page.dart';
 import 'platform/flatpak_platform.dart';
+import 'services/log_service.dart';
 import 'services/system_monitor.dart';
 import 'services/gps_service.dart';
 import 'services/api_benchmark.dart';
@@ -20,14 +21,19 @@ import 'services/theme_service.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_spacing.dart';
 import 'theme/app_theme.dart';
+import 'widgets/operations_island.dart';
+import 'widgets/pressable.dart';
+import 'widgets/skeleton.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  // Probe the native flatpak plugin once. On flutter-auto (AGL) this sets
-  // _useProcessFallback=true so EventChannel.receiveBroadcastStream is never
-  // invoked (which would log MissingPluginException internally).
-  await FlatpakPlatform.init();
-  runApp(const AglApp());
+void main() {
+  LogService.install();
+  LogService.runZoned(() {
+    // Initialise the binding inside the zone so async errors surfaced
+    // by Flutter's machinery propagate to runZonedGuarded's onError
+    // (per the Flutter cookbook's error-handling guidance).
+    WidgetsFlutterBinding.ensureInitialized();
+    runApp(const AglApp());
+  });
 }
 
 class AglApp extends StatelessWidget {
@@ -56,37 +62,28 @@ class AglApp extends StatelessWidget {
               theme: isDark ? AppTheme.dark() : AppTheme.light(),
               home: const _Shell(),
               builder: (context, child) {
-                // Scale UI for small portrait displays (e.g. 7" 1080x1920)
-                // The app was designed for landscape; on portrait the logical
-                // pixels are too small, making everything tiny.
+                // Boost text size for hard-to-read displays without rescaling
+                // the whole layout (Transform.scale breaks LayoutBuilder /
+                // MediaQuery propagation and causes overflow). Text-only
+                // scaling lets the existing responsive layouts adapt.
                 final mq = MediaQuery.of(context);
                 final isPortrait = mq.size.height > mq.size.width;
                 final shortSide = isPortrait ? mq.size.width : mq.size.height;
-                // Scale up if short side is narrow (< 600 logical px).
-                // 1.6x on very narrow portrait for 7" 1080x1920 automotive
-                // displays — combined with the 40%-larger base fonts in
-                // AppTypography, this makes everything readable at arm's length.
-                double scaleFactor = 1.0;
+                final longSide = isPortrait ? mq.size.height : mq.size.width;
+                double textScale = 1.0;
                 if (shortSide < 600) {
-                  scaleFactor = 1.6;
-                } else if (shortSide < 800) {
-                  scaleFactor = 1.3;
+                  textScale = 1.15;
+                } else if (mq.devicePixelRatio < 1.5 && longSide >= 1600) {
+                  // 7" 1920×1080 reporting DPR=1.0 — bump text only.
+                  textScale = 1.25;
                 }
-                if (scaleFactor == 1.0) return child!;
+                if (textScale == 1.0) return child!;
                 return MediaQuery(
                   data: mq.copyWith(
-                    textScaler: TextScaler.linear(
-                        mq.textScaler.scale(scaleFactor)),
+                    textScaler:
+                        TextScaler.linear(mq.textScaler.scale(textScale)),
                   ),
-                  child: Transform.scale(
-                    scale: scaleFactor,
-                    alignment: Alignment.topLeft,
-                    child: SizedBox(
-                      width: mq.size.width / scaleFactor,
-                      height: mq.size.height / scaleFactor,
-                      child: child,
-                    ),
-                  ),
+                  child: child!,
                 );
               },
             );
@@ -142,7 +139,19 @@ class _ShellState extends State<_Shell> {
   Widget build(BuildContext context) {
     final bloc = context.read<FlatpakBloc>();
     return Scaffold(
-      body: _buildBody(bloc),
+      body: Stack(
+        children: [
+          // Page body
+          Positioned.fill(child: _buildBody(bloc)),
+          // Floating operations dynamic island (top-center)
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: OperationsIsland(),
+          ),
+        ],
+      ),
       bottomNavigationBar: _bottomNav(bloc),
     );
   }
@@ -156,6 +165,9 @@ class _ShellState extends State<_Shell> {
   ];
 
   Widget _bottomNav(FlatpakBloc bloc) {
+    // Vehicle-friendly bottom nav: oversized touch targets (≥64dp tall),
+    // larger icons (28) and labels (13), prominent active-state pill so
+    // the driver can confirm location with a single glance.
     return Container(
       decoration: BoxDecoration(
         color: context.colors.card,
@@ -164,7 +176,8 @@ class _ShellState extends State<_Shell> {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+          padding: const EdgeInsets.symmetric(
+              vertical: AppSpacing.sm, horizontal: AppSpacing.xs),
           child: Row(
             children: List.generate(_navItems.length, (i) {
               final item = _navItems[i];
@@ -177,42 +190,44 @@ class _ShellState extends State<_Shell> {
                     setState(() => _tab = i);
                     if (i == 0 && wasHome) bloc.add(const RefreshAll());
                   },
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        active ? item.activeIcon : item.icon,
-                        size: 24,
-                        color: active ? AppColors.brand : AppColors.textTertiary,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        item.label,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                          color: active ? AppColors.brand : AppColors.textTertiary,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: AppSpacing.sm),
+                    constraints: const BoxConstraints(minHeight: 64),
+                    decoration: BoxDecoration(
+                      color: active
+                          ? AppColors.brand.withValues(alpha: 0.12)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(AppSpacing.rLg),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          active ? item.activeIcon : item.icon,
+                          size: 28,
+                          color: active
+                              ? AppColors.brand
+                              : context.colors.textS,
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      // Glow dot
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: active ? 6 : 0,
-                        height: active ? 6 : 0,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: active ? AppColors.brand : Colors.transparent,
-                          boxShadow: active
-                              ? [BoxShadow(
-                                  color: AppColors.brand.withValues(alpha: 0.60),
-                                  blurRadius: 10,
-                                  spreadRadius: 2,
-                                )]
-                              : null,
+                        const SizedBox(height: 4),
+                        Text(
+                          item.label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: active
+                                ? FontWeight.w700
+                                : FontWeight.w600,
+                            color: active
+                                ? AppColors.brand
+                                : context.colors.textS,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -255,13 +270,12 @@ class _ShellState extends State<_Shell> {
               Container(
                 width: 44, height: 44,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppColors.brand, AppColors.accentCyan],
-                    begin: Alignment.topLeft, end: Alignment.bottomRight,
-                  ),
+                  color: context.colors.cardEl,
+                  border: Border.all(color: context.colors.border),
                   borderRadius: BorderRadius.circular(AppSpacing.rMd),
                 ),
-                child: const Icon(Icons.apps_rounded, color: Colors.white, size: 24),
+                child: Icon(Icons.apps_rounded,
+                    color: context.colors.textP, size: 22),
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
@@ -275,32 +289,67 @@ class _ShellState extends State<_Shell> {
                   ],
                 ),
               ),
-              GestureDetector(
+              Pressable(
                 onTap: () => _showSearch(context, bloc),
                 child: Container(
-                  width: 44, height: 44,
+                  height: 44,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md),
                   decoration: BoxDecoration(
                     color: context.colors.cardEl,
                     borderRadius: BorderRadius.circular(AppSpacing.rMd),
                     border: Border.all(color: context.colors.border),
                   ),
-                  child: const Icon(Icons.search_rounded,
-                      size: 20, color: AppColors.textPrimary),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.search_rounded,
+                          size: 20, color: AppColors.textPrimary),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Search',
+                        style: TextStyle(
+                          color: context.colors.textP,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(width: AppSpacing.sm),
-              GestureDetector(
+              // Close App — vehicle-friendly: door-exit icon + label
+              Pressable(
                 onTap: () => _confirmExit(context),
                 child: Container(
-                  width: 44, height: 44,
+                  height: 44,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md),
                   decoration: BoxDecoration(
                     color: AppColors.danger.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(AppSpacing.rMd),
                     border: Border.all(
                         color: AppColors.danger.withValues(alpha: 0.35)),
                   ),
-                  child: const Icon(Icons.close_rounded,
-                      size: 22, color: AppColors.danger),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Icon(Icons.exit_to_app_rounded,
+                          size: 22, color: AppColors.danger),
+                      SizedBox(width: 6),
+                      Text(
+                        'Close App',
+                        style: TextStyle(
+                          color: AppColors.danger,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -332,8 +381,12 @@ class _ShellState extends State<_Shell> {
       buildWhen: (p, c) {
         if (p.runtimeType != c.runtimeType) return true;
         if (p is FlatpakLoaded && c is FlatpakLoaded) {
-          return p.items != c.items || p.hasMore != c.hasMore ||
-              p.installed != c.installed || p.installingIds != c.installingIds;
+          return p.items != c.items ||
+              p.hasMore != c.hasMore ||
+              p.installed != c.installed ||
+              p.installingIds != c.installingIds ||
+              p.installProgress != c.installProgress ||
+              p.isLoading != c.isLoading;
         }
         return true;
       },
@@ -346,8 +399,7 @@ class _ShellState extends State<_Shell> {
       },
       builder: (context, state) {
         if (state is FlatpakLoading) {
-          return const Center(
-              child: CircularProgressIndicator(color: AppColors.brand));
+          return const _SkeletonHomeContent();
         }
         if (state is FlatpakError) {
           return Center(
@@ -359,36 +411,39 @@ class _ShellState extends State<_Shell> {
           );
         }
         if (state is FlatpakLoaded) {
+          // Source-switch in flight: show skeletons over the whole
+          // feed while the new catalog's items load, paired with the
+          // dynamic island's "Switching to X" pill at the top.
+          if (state.isLoading) {
+            return const _SkeletonHomeContent();
+          }
           final items = state.items;
           if (items.isEmpty) return const _EmptyState();
           final featured = items.take(4).toList();
           final rest = items.skip(4).toList();
 
-          return CustomScrollView(
+          return RefreshIndicator(
+            color: AppColors.brand,
+            backgroundColor: context.colors.card,
+            edgeOffset: 8,
+            displacement: 40,
+            onRefresh: () async {
+              bloc.add(const RefreshAll());
+              // Wait for the next FlatpakLoaded after the refresh completes.
+              await bloc.stream
+                  .where((s) => s is FlatpakLoaded && !s.isLoading)
+                  .first
+                  .timeout(const Duration(seconds: 15), onTimeout: () => state);
+            },
+            child: CustomScrollView(
             controller: _scrollCtl,
-            physics: const BouncingScrollPhysics(),
+            physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics()),
             slivers: [
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: AppSpacing.pageH),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 4, height: 24,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(2),
-                          gradient: const LinearGradient(
-                            colors: [AppColors.brand, AppColors.accentCyan],
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.md),
-                      Text('Featured',
-                          style: Theme.of(context).textTheme.headlineMedium),
-                    ],
-                  ),
+                  child: _SectionHeader(label: 'FEATURED'),
                 ),
               ),
               const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.md)),
@@ -408,10 +463,13 @@ class _ShellState extends State<_Shell> {
                       separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.lg),
                       itemBuilder: (_, i) {
                         final pkg = featured[i];
-                        return GestureDetector(
+                        return FadeInSlide(
                           key: ValueKey('f_${pkg.id}'),
-                          onTap: () => _openDetail(context, pkg),
-                          child: _FeaturedCard(package: pkg, width: cardW),
+                          delay: Duration(milliseconds: 40 * i),
+                          child: Pressable(
+                            onTap: () => _openDetail(context, pkg),
+                            child: _FeaturedCard(package: pkg, width: cardW),
+                          ),
                         );
                       },
                     ),
@@ -420,28 +478,11 @@ class _ShellState extends State<_Shell> {
               ),
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.pageH, AppSpacing.xxxl, AppSpacing.pageH, AppSpacing.md),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 4, height: 24,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(2),
-                          gradient: const LinearGradient(
-                            colors: [AppColors.accentPink, AppColors.accentOrange],
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.md),
-                      Text('All apps',
-                          style: Theme.of(context).textTheme.headlineMedium),
-                      const SizedBox(width: AppSpacing.sm),
-                      Text('${items.length}+',
-                          style: Theme.of(context).textTheme.bodySmall),
-                    ],
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.pageH,
+                      AppSpacing.xxxl, AppSpacing.pageH, AppSpacing.md),
+                  child: _SectionHeader(
+                    label: 'ALL APPS',
+                    trailing: '${items.length}',
                   ),
                 ),
               ),
@@ -481,9 +522,17 @@ class _ShellState extends State<_Shell> {
                                       color: AppColors.brand)))
                               : const SizedBox(height: AppSpacing.huge);
                         }
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                          child: _buildAppTile(context, rest[index], state, bloc),
+                        // Staggered entrance, capped at the first
+                        // screenful so deep-scroll doesn't have to wait.
+                        final staggerMs = index < 12 ? 25 * index : 0;
+                        return FadeInSlide(
+                          delay: Duration(milliseconds: staggerMs),
+                          child: Padding(
+                            padding:
+                                const EdgeInsets.only(bottom: AppSpacing.md),
+                            child: _buildAppTile(
+                                context, rest[index], state, bloc),
+                          ),
                         );
                       },
                       childCount: rest.length + (state.hasMore ? 1 : 0),
@@ -494,6 +543,7 @@ class _ShellState extends State<_Shell> {
                 }),
               ),
             ],
+            ),
           );
         }
         return const SizedBox.shrink();
@@ -535,12 +585,18 @@ class _ShellState extends State<_Shell> {
 
   Widget _buildAppTile(BuildContext context, FlatpakPackage pkg,
       FlatpakLoaded state, FlatpakBloc bloc) {
+    // The bloc keys installingIds/installed off the *normalized*
+    // flatpakId. For Flathub apps `pkg.id` is the slug, which does not
+    // match — always normalize from `pkg.flatpakId` before lookup,
+    // otherwise the spinner/installed state never appears on the tile.
+    final id = FlatpakRepository.normalizeFlatpakId(pkg.flatpakId);
     return RepaintBoundary(
       key: ValueKey(pkg.id),
       child: _AppTile(
         package: pkg,
-        isInstalled: state.installed.contains(pkg.flatpakId),
-        isInstalling: state.installingIds.contains(pkg.id),
+        isInstalled: state.installed.contains(id),
+        isInstalling: state.installingIds.contains(id),
+        installProgress: state.installProgress[id],
         onTap: () => _openDetail(context, pkg),
         onInstall: () {
           bloc.add(InstallApp(pkg.flatpakId));
@@ -594,7 +650,8 @@ class _ShellState extends State<_Shell> {
 }
 
 // =====================================================================
-// SOURCE TOGGLE
+// SOURCE TOGGLE — Tesla-style segmented control: squared-off corners,
+// monochrome active state, no accent glow.
 // =====================================================================
 class _SourceToggle extends StatelessWidget {
   final AppSource current;
@@ -605,33 +662,29 @@ class _SourceToggle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 48,
-      padding: const EdgeInsets.all(4),
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: context.colors.cardEl,
-        borderRadius: BorderRadius.circular(AppSpacing.rFull),
+        borderRadius: BorderRadius.circular(AppSpacing.rMd),
         border: Border.all(color: context.colors.border),
       ),
       child: Row(
         children: [
           for (final s in AppSource.values)
             Expanded(
-              child: GestureDetector(
+              child: Pressable(
                 onTap: () => onChanged(s),
+                pressedScale: 0.96,
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOutCubic,
                   decoration: BoxDecoration(
-                    color: current == s ? context.colors.card : Colors.transparent,
-                    borderRadius: BorderRadius.circular(AppSpacing.rFull),
-                    boxShadow: current == s
-                        ? [BoxShadow(
-                            color: (s == AppSource.pensHub
-                                    ? AppColors.accentCyan
-                                    : AppColors.accentOrange)
-                                .withValues(alpha: 0.20),
-                            blurRadius: 12,
-                            spreadRadius: 0,
-                          )]
+                    color: current == s
+                        ? context.colors.card
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(AppSpacing.rSm),
+                    border: current == s
+                        ? Border.all(color: context.colors.border)
                         : null,
                   ),
                   child: Row(
@@ -641,24 +694,22 @@ class _SourceToggle extends StatelessWidget {
                         s == AppSource.pensHub
                             ? Icons.storefront_rounded
                             : Icons.public_rounded,
-                        size: 18,
+                        size: 17,
                         color: current == s
-                            ? (s == AppSource.pensHub
-                                ? AppColors.accentCyan
-                                : AppColors.accentOrange)
-                            : AppColors.textTertiary,
+                            ? context.colors.textP
+                            : context.colors.textT,
                       ),
                       const SizedBox(width: AppSpacing.sm),
                       Text(
                         s.label,
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                              color: current == s
-                                  ? (s == AppSource.pensHub
-                                      ? AppColors.accentCyan
-                                      : AppColors.accentOrange)
-                                  : AppColors.textTertiary,
-                              fontWeight: FontWeight.w700,
-                            ),
+                        style: TextStyle(
+                          color: current == s
+                              ? context.colors.textP
+                              : context.colors.textT,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.2,
+                        ),
                       ),
                     ],
                   ),
@@ -672,7 +723,56 @@ class _SourceToggle extends StatelessWidget {
 }
 
 // =====================================================================
-// FEATURED CARD
+// SECTION HEADER — Tesla-style: small uppercase label, generous
+// letter-spacing, hairline rule, optional trailing count. Replaces the
+// colorful gradient accent bars.
+// =====================================================================
+class _SectionHeader extends StatelessWidget {
+  final String label;
+  final String? trailing;
+  const _SectionHeader({required this.label, this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: context.colors.textP,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 2.0,
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Container(
+            height: 1,
+            color: context.colors.border,
+          ),
+        ),
+        if (trailing != null) ...[
+          const SizedBox(width: AppSpacing.sm),
+          Text(
+            trailing!,
+            style: TextStyle(
+              color: context.colors.textT,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+// =====================================================================
+// FEATURED CARD — Tesla-style: flat surface, hairline border, one
+// subtle tint strip, no rainbow gradient.
 // =====================================================================
 class _FeaturedCard extends StatelessWidget {
   final FlatpakPackage package;
@@ -681,108 +781,94 @@ class _FeaturedCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final grad = AppColors.gradientFor(package.id);
+    // Single accent color per card instead of full-card gradient — use
+    // the first color of the deterministic package gradient so every
+    // card still has its own identity, applied only as a thin top bar.
+    final accent = AppColors.gradientFor(package.id).first;
+
     return Container(
       width: width,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppSpacing.rXl),
-        gradient: LinearGradient(
-          colors: grad, begin: Alignment.topLeft, end: Alignment.bottomRight,
-        ),
+        color: context.colors.card,
+        borderRadius: BorderRadius.circular(AppSpacing.rLg),
+        border: Border.all(color: context.colors.border),
       ),
-      child: Stack(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Decorative circles
-          Positioned(
-            top: -30, right: -30,
-            child: Container(
-              width: 120, height: 120,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.10),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: -20, left: -15,
-            child: Container(
-              width: 80, height: 80,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.06),
-              ),
-            ),
-          ),
-          // Bottom gradient overlay for text readability
-          Positioned(
-            left: 0, right: 0, bottom: 0, height: 100,
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(AppSpacing.rXl)),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.35),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(AppSpacing.xl),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // Top row: icon + badge
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Container(
-                      width: 52, height: 52,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(AppSpacing.rMd),
+          // Thin accent bar — the only color on the card
+          Container(height: 3, color: accent),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Top row: icon + FEATURED tag
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Hero(
+                        tag: 'app-icon-${package.flatpakId}',
+                        child: Container(
+                          width: 56,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            color: context.colors.cardEl,
+                            borderRadius:
+                                BorderRadius.circular(AppSpacing.rMd),
+                            border: Border.all(color: context.colors.border),
+                          ),
+                          child: Center(
+                            child: _AppIcon(url: package.icon, size: 32),
+                          ),
+                        ),
                       ),
-                      child: Center(child: _AppIcon(url: package.icon, size: 32)),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.sm, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.20),
-                        borderRadius: BorderRadius.circular(AppSpacing.rFull),
-                      ),
-                      child: const Text('FEATURED',
-                          style: TextStyle(
-                            color: Colors.white, fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.2,
-                          )),
-                    ),
-                  ],
-                ),
-                // Bottom: text
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(package.name,
-                        maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 26,
-                            fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 4),
-                    Text(package.summary ?? '',
-                        maxLines: 2, overflow: TextOverflow.ellipsis,
+                      const Spacer(),
+                      Text(
+                        'FEATURED',
                         style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.85),
-                            fontSize: 18, height: 1.35)),
-                  ],
-                ),
-              ],
+                          color: accent,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.6,
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Bottom: text
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        package.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: context.colors.textP,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          height: 1.1,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        package.summary ?? '',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: context.colors.textS,
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -798,22 +884,24 @@ class _AppTile extends StatelessWidget {
   final FlatpakPackage package;
   final bool isInstalled;
   final bool isInstalling;
+  final int? installProgress;
   final VoidCallback onTap;
   final VoidCallback onInstall;
   final VoidCallback onUninstall;
 
   const _AppTile({
     required this.package, required this.isInstalled,
-    required this.isInstalling, required this.onTap,
-    required this.onInstall, required this.onUninstall,
+    required this.isInstalling, this.installProgress,
+    required this.onTap, required this.onInstall,
+    required this.onUninstall,
   });
 
   @override
   Widget build(BuildContext context) {
-    final grad = AppColors.gradientFor(package.id);
-    return GestureDetector(
+    return Pressable(
       onTap: onTap,
       child: Container(
+        padding: const EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
           color: context.colors.card,
           borderRadius: BorderRadius.circular(AppSpacing.rLg),
@@ -821,55 +909,63 @@ class _AppTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Gradient accent strip
-            Container(
-              width: 4,
-              height: 72,
-              decoration: BoxDecoration(
-                borderRadius: const BorderRadius.horizontal(
-                    left: Radius.circular(AppSpacing.rLg)),
-                gradient: LinearGradient(
-                  colors: grad,
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+            // Monochrome icon tile — shared-element flight to detail.
+            Hero(
+              tag: 'app-icon-${package.flatpakId}',
+              flightShuttleBuilder: _iconFlight,
+              child: Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: context.colors.cardEl,
+                  borderRadius: BorderRadius.circular(AppSpacing.rMd),
+                  border: Border.all(color: context.colors.border),
+                ),
+                child: Center(
+                  child: _AppIcon(url: package.icon, size: 30),
                 ),
               ),
             ),
+            const SizedBox(width: AppSpacing.md),
             Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.md),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 52, height: 52,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(AppSpacing.rMd),
-                        gradient: LinearGradient(
-                            colors: grad, begin: Alignment.topLeft,
-                            end: Alignment.bottomRight),
-                      ),
-                      child: Center(child: _AppIcon(url: package.icon, size: 30)),
-                    ),
-                    const SizedBox(width: AppSpacing.md),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(package.name, maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleMedium),
-                          const SizedBox(height: 3),
-                          Text(package.summary ?? '', maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    _buildAction(context),
-                  ],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    package.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                        ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    package.summary ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            // Smooth morph between Install / Installing / Installed
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, anim) => FadeTransition(
+                opacity: anim,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.94, end: 1.0).animate(anim),
+                  child: child,
                 ),
+              ),
+              child: KeyedSubtree(
+                key: ValueKey(_actionKey()),
+                child: _buildAction(context),
               ),
             ),
           ],
@@ -878,24 +974,92 @@ class _AppTile extends StatelessWidget {
     );
   }
 
+  String _actionKey() {
+    if (isInstalling) return 'ing-${installProgress ?? -1}';
+    if (isInstalled) return 'ed';
+    return 'idle';
+  }
+
+  /// Preserve the icon's square shape + border during the shared-element
+  /// transition so it doesn't morph into a circle mid-flight.
+  static Widget _iconFlight(
+    BuildContext flightContext,
+    Animation<double> animation,
+    HeroFlightDirection flightDirection,
+    BuildContext fromHeroContext,
+    BuildContext toHeroContext,
+  ) {
+    final Hero toHero = toHeroContext.widget as Hero;
+    return Material(
+      color: Colors.transparent,
+      child: toHero.child,
+    );
+  }
+
   Widget _buildAction(BuildContext context) {
     if (isInstalling) {
-      return const SizedBox(width: 24, height: 24,
-          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.brand));
+      // Show a downloading pill: progress ring + percent if available,
+      // otherwise indeterminate spinner. Replaces the previous bare
+      // spinner so the user can see install is actually progressing.
+      final pct = installProgress;
+      final hasPct = pct != null && pct > 0;
+      return Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppColors.brand.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(AppSpacing.rFull),
+          border: Border.all(
+              color: AppColors.brand.withValues(alpha: 0.30)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                value: hasPct ? pct / 100 : null,
+                strokeWidth: 2,
+                valueColor:
+                    const AlwaysStoppedAnimation(AppColors.brand),
+                backgroundColor:
+                    AppColors.brand.withValues(alpha: 0.18),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              hasPct ? '$pct%' : 'Installing',
+              style: const TextStyle(
+                color: AppColors.brand,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
     }
     if (isInstalled) {
       return Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 20),
+        const Icon(Icons.check_circle_rounded,
+            color: AppColors.success, size: 20),
         const SizedBox(width: 4),
-        GestureDetector(
+        Pressable(
           onTap: onUninstall,
-          child: const Icon(Icons.delete_outline_rounded,
-              color: AppColors.danger, size: 20),
+          pressedScale: 0.85,
+          child: const Padding(
+            padding: EdgeInsets.all(4),
+            child: Icon(Icons.delete_outline_rounded,
+                color: AppColors.danger, size: 20),
+          ),
         ),
       ]);
     }
-    return GestureDetector(
+    final size = package.formattedDownloadSize;
+    return Pressable(
       onTap: onInstall,
+      pressedScale: 0.94,
       child: Container(
         padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
@@ -903,9 +1067,31 @@ class _AppTile extends StatelessWidget {
           color: AppColors.brand,
           borderRadius: BorderRadius.circular(AppSpacing.rFull),
         ),
-        child: Text('Install',
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: Colors.white, fontWeight: FontWeight.w700)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Install',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Colors.white, fontWeight: FontWeight.w700)),
+            if (size != null) ...[
+              const SizedBox(width: 6),
+              Container(
+                width: 3, height: 3,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(size,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  )),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -960,10 +1146,133 @@ class _AppIcon extends StatelessWidget {
       width: size, height: size,
       memCacheWidth: (size * 2).toInt(),
       fit: BoxFit.contain,
+      fadeInDuration: const Duration(milliseconds: 220),
+      fadeOutDuration: const Duration(milliseconds: 120),
       placeholder: (_, __) =>
           Icon(Icons.apps_rounded, size: size, color: Colors.white38),
       errorWidget: (_, __, ___) =>
           Icon(Icons.broken_image_rounded, size: size, color: Colors.white38),
     );
+  }
+}
+
+// =====================================================================
+// SKELETON HOME CONTENT
+// =====================================================================
+/// Skeleton layout shown while the home feed is loading or a source
+/// switch is in flight. Mirrors the real feed's shape (Featured row +
+/// All apps list) so the layout doesn't jump when real content arrives.
+class _SkeletonHomeContent extends StatelessWidget {
+  const _SkeletonHomeContent();
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, box) {
+      final w = box.maxWidth;
+      final cardW = w < 400
+          ? w * 0.75
+          : w < 600
+              ? w * 0.65
+              : 300.0;
+      final cardH = w < 400 ? 180.0 : 220.0;
+      final wide = w > 700;
+
+      return CustomScrollView(
+        physics: const NeverScrollableScrollPhysics(),
+        slivers: [
+          // Section heading placeholder
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.pageH),
+              child: Row(
+                children: [
+                  Container(
+                    width: 4,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(2),
+                      color: context.colors.cardEl,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  const SkeletonBox(width: 130, height: 22),
+                ],
+              ),
+            ),
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.md)),
+
+          // Featured row skeleton
+          SliverToBoxAdapter(
+            child: SizedBox(
+              height: cardH,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                physics: const NeverScrollableScrollPhysics(),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.pageH),
+                itemCount: 4,
+                separatorBuilder: (_, __) =>
+                    const SizedBox(width: AppSpacing.lg),
+                itemBuilder: (_, __) =>
+                    SkeletonFeaturedCard(width: cardW, height: cardH),
+              ),
+            ),
+          ),
+
+          // "All apps" heading placeholder
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.pageH,
+                  AppSpacing.xxxl, AppSpacing.pageH, AppSpacing.md),
+              child: Row(
+                children: [
+                  Container(
+                    width: 4,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(2),
+                      color: context.colors.cardEl,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  const SkeletonBox(width: 110, height: 22),
+                ],
+              ),
+            ),
+          ),
+
+          // All apps tiles
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.pageH),
+            sliver: wide
+                ? SliverGrid(
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: AppSpacing.md,
+                      mainAxisSpacing: AppSpacing.md,
+                      mainAxisExtent: 80,
+                    ),
+                    delegate: SliverChildBuilderDelegate(
+                      (_, __) => const SkeletonAppTile(),
+                      childCount: 6,
+                    ),
+                  )
+                : SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (_, __) => const Padding(
+                        padding: EdgeInsets.only(bottom: AppSpacing.md),
+                        child: SkeletonAppTile(),
+                      ),
+                      childCount: 6,
+                    ),
+                  ),
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.huge)),
+        ],
+      );
+    });
   }
 }

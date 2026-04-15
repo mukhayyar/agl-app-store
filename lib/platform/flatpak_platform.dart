@@ -1,323 +1,265 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Flatpak operations for the AGL App Store.
 ///
-/// Uses a **multi-strategy chain** for every operation. Each method tries
-/// several approaches in order, falling through to the next on failure:
+/// Uses a **dual strategy**:
+///   1. Try the native C++ Platform Channel (works on desktop GTK runner)
+///   2. Fall back to `dart:io` Process.run (works on flutter-auto / AGL)
 ///
-///   Strategy 1: Native C++ Platform Channel   (desktop GTK runner)
-///   Strategy 2: `flatpak ... --system` CLI    (root-privileged embedded)
-///   Strategy 3: `flatpak ... --user` CLI      (unprivileged or no system install)
-///   Strategy 4: `flatpak ...` CLI (auto scope)(last-resort)
-///
-/// Only if ALL strategies fail does the method throw. Errors from each
-/// attempt are collected and included in the final exception message for
-/// easier debugging.
+/// This ensures the app works both during development (desktop) and on
+/// the actual AGL embedded target where flutter-auto doesn't compile
+/// the native linux/runner plugin.
 class FlatpakPlatform {
   static const _channel = MethodChannel('com.pens.flatpak/installer');
   static const _events = EventChannel('com.pens.flatpak/installer_events');
 
-  /// Whether we've detected the native plugin is unavailable.
-  /// Starts as `true` (assume no native plugin) and flips to `false` only
-  /// if init() successfully probes the channel.
-  static bool _useProcessFallback = true;
-  static bool _initialized = false;
+  /// Whether we've detected the native plugin is unavailable
+  static bool _useProcessFallback = false;
 
   static const _penshubRemote = 'penshub';
   static const _penshubUrl = 'https://repo.agl-store.cyou';
   static const _penshubGpgUrl = 'https://repo.agl-store.cyou/public.gpg';
   static const _gpgTmpPath = '/tmp/penshub.gpg';
 
-  // ════════════════════════════════════════════════════════════════
-  // INIT — probe the native plugin once at app startup
-  // ════════════════════════════════════════════════════════════════
+  // ── Install events stream ───────────────────────────────────
+  /// Bus for events emitted by the Dart fallback path (when the native
+  /// plugin is absent). The `installEvents()` stream merges these with
+  /// the native EventChannel so the bloc sees a uniform event shape
+  /// regardless of platform.
+  static final StreamController<dynamic> _syntheticEvents =
+      StreamController<dynamic>.broadcast();
 
-  /// Probes the native MethodChannel ONCE at app startup. Call from main()
-  /// BEFORE runApp() so installEvents() can skip receiveBroadcastStream on
-  /// flutter-auto (which would log a spurious MissingPluginException).
-  static Future<void> init() async {
-    if (_initialized) return;
-    _initialized = true;
-    try {
-      await _channel.invokeMethod<bool>('isInstalled', {
-        'appId': 'probe.nonexistent',
-      });
-      _useProcessFallback = false;
-    } on MissingPluginException {
-      _useProcessFallback = true;
-    } catch (_) {
-      _useProcessFallback = false;
-    }
-  }
+  /// Returns a unified stream of install progress / done events.
+  ///
+  /// Sources merged:
+  ///   1. Native EventChannel (when the C++ plugin is loaded)
+  ///   2. Synthetic events pushed by the Dart `Process.run` fallback
+  ///      (used on flutter-auto / AGL where the native plugin is absent)
+  ///
+  /// We probe the method channel via `ping` to decide whether to attach
+  /// the native source. We cannot rely on `handleError` for the
+  /// MissingPluginException because Flutter's EventChannel routes it to
+  /// `FlutterError.reportError` instead of the stream's error sink.
+  static Stream<dynamic> installEvents() {
+    late StreamController<dynamic> controller;
+    StreamSubscription<dynamic>? nativeSub;
+    StreamSubscription<dynamic>? syntheticSub;
 
-  // ════════════════════════════════════════════════════════════════
-  // CHAIN RUNNER — execute strategies in order, return first success
-  // ════════════════════════════════════════════════════════════════
+    controller = StreamController<dynamic>.broadcast(
+      onListen: () async {
+        // Always pipe synthetic events — they're how the Dart fallback
+        // tells the bloc that an install/uninstall finished.
+        syntheticSub = _syntheticEvents.stream.listen(controller.add);
 
-  /// Runs async strategies in order. Returns the result of the first
-  /// strategy that succeeds. If all fail, throws an Exception with all
-  /// collected error messages for debugging.
-  static Future<T> _chain<T>(
-    String opName,
-    List<Future<T> Function()> strategies,
-  ) async {
-    final errors = <String>[];
-    for (var i = 0; i < strategies.length; i++) {
-      try {
-        return await strategies[i]();
-      } catch (e) {
-        errors.add('  [${i + 1}] $e');
-      }
-    }
-    throw Exception(
-      '$opName: all ${strategies.length} strategies failed:\n'
-      '${errors.join("\n")}',
+        // Optionally attach native event channel.
+        if (!_useProcessFallback) {
+          try {
+            await _channel.invokeMethod<bool>('ping');
+          } on MissingPluginException {
+            _useProcessFallback = true;
+          } catch (_) {
+            // PlatformException etc. — plugin exists; ignore probe failure.
+          }
+        }
+        if (_useProcessFallback) return;
+        try {
+          nativeSub = _events.receiveBroadcastStream().listen(
+            controller.add,
+            onError: controller.addError,
+          );
+        } catch (_) {
+          _useProcessFallback = true;
+        }
+      },
+      onCancel: () async {
+        await nativeSub?.cancel();
+        await syntheticSub?.cancel();
+      },
     );
+    return controller.stream;
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // HELPER — run a CLI command with absolute-path fallback
-  // ════════════════════════════════════════════════════════════════
+  /// Push a synthetic event to mirror the native `done` payload shape so
+  /// the bloc's existing event listener can process it uniformly.
+  static void _emitDone(String appId, {required bool ok}) {
+    _syntheticEvents.add({
+      'type': 'done',
+      'appId': appId,
+      'status': ok ? 0 : 1,
+    });
+  }
 
-  /// Runs a command. If not in PATH, tries common absolute locations.
-  /// Throws on non-zero exit code.
+  // ── Exit the app (for kiosk/embedded mode) ──────────────────
+  /// Forces the flutter-auto process to exit cleanly. Used by the UI
+  /// close button on embedded targets where the app would otherwise
+  /// hog the compositor and require SSH + systemctl stop to kill.
+  static Future<void> exitApp() async {
+    // Try to cleanly exit; SIGTERM our own process group
+    try {
+      await Process.run('systemctl', ['stop', 'agl-app-flutter@agl_app_store']);
+    } catch (_) {
+      // Fallback: just exit the dart VM
+    }
+    // If systemctl stop didn't kill us (e.g. running as root from terminal),
+    // exit the process directly
+    exit(0);
+  }
+
+  // ── Helper: run a process and return stdout ─────────────────
+  /// Runs a command, falling back to absolute paths if PATH is not set
+  /// (systemd services on AGL may have a minimal environment).
   static Future<String> _run(String cmd, List<String> args) async {
     ProcessResult result;
     try {
       result = await Process.run(cmd, args);
     } on ProcessException {
+      // Command not found in PATH — try known absolute paths
       final absPath = await _resolveAbsolute(cmd);
       if (absPath == null) {
-        throw Exception('$cmd: command not found');
+        throw Exception('$cmd: command not found in PATH or standard locations');
       }
       result = await Process.run(absPath, args);
     }
     if (result.exitCode != 0) {
-      final err = result.stderr.toString().trim();
-      throw Exception('$cmd exited ${result.exitCode}: $err');
+      final stderr = result.stderr.toString().trim();
+      throw Exception('$cmd ${args.join(' ')} failed (${result.exitCode}): $stderr');
     }
     return result.stdout.toString().trim();
   }
 
+  /// Resolves a command name to an absolute path by checking standard locations.
   static Future<String?> _resolveAbsolute(String cmd) async {
-    for (final prefix in const [
-      '/usr/bin/', '/bin/', '/usr/local/bin/', '/usr/sbin/', '/sbin/',
-    ]) {
+    for (final prefix in ['/usr/bin/', '/bin/', '/usr/local/bin/', '/usr/sbin/', '/sbin/']) {
       final path = '$prefix$cmd';
       if (await File(path).exists()) return path;
     }
     return null;
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // EVENT STREAM — install progress events
-  // ════════════════════════════════════════════════════════════════
-
-  static Stream<dynamic> installEvents() {
-    if (_useProcessFallback) return const Stream.empty();
-    return _events.receiveBroadcastStream().handleError(
-      (_) => _useProcessFallback = true,
-      test: (e) => e is MissingPluginException,
-    );
-  }
-
-  // ════════════════════════════════════════════════════════════════
-  // APP LIFECYCLE — kiosk-mode exit
-  // ════════════════════════════════════════════════════════════════
-
-  static Future<void> exitApp() async {
-    try {
-      await _run('systemctl', ['stop', 'agl-app-flutter@agl_app_store']);
-    } catch (_) {}
-    exit(0);
-  }
-
-  // ════════════════════════════════════════════════════════════════
-  // ENSURE REMOTE — register PENSHub with fallbacks
-  // ════════════════════════════════════════════════════════════════
-
+  // ── Ensure remote ───────────────────────────────────────────
   static Future<Map<String, dynamic>> ensureRemote() async {
-    return _chain<Map<String, dynamic>>('ensureRemote', [
-      // Strategy 1 — native plugin
-      () async {
-        if (_useProcessFallback) throw Exception('native plugin unavailable');
-        final result = await _channel
-            .invokeMethod<Map<dynamic, dynamic>>('ensureRemote');
+    if (!_useProcessFallback) {
+      try {
+        final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('ensureRemote');
         return Map<String, dynamic>.from(result ?? {});
-      },
-      // Strategy 2 — already exists?
-      () async {
-        final remotes =
-            await _run('flatpak', ['remote-list', '--system', '--columns=name']);
-        if (remotes.contains(_penshubRemote)) {
-          return {'added': false, 'alreadyExists': true};
-        }
-        throw Exception('not present');
-      },
-      // Strategy 3 — fetch GPG + add with verification (system)
-      () async {
-        await _fetchGpgKey();
-        await _run('flatpak', [
-          'remote-add', '--system', '--if-not-exists',
-          '--gpg-import=$_gpgTmpPath', _penshubRemote, _penshubUrl,
-        ]);
-        return {'added': true, 'alreadyExists': false};
-      },
-      // Strategy 4 — fetch GPG + add with verification (user)
-      () async {
-        await _fetchGpgKey();
-        await _run('flatpak', [
-          'remote-add', '--user', '--if-not-exists',
-          '--gpg-import=$_gpgTmpPath', _penshubRemote, _penshubUrl,
-        ]);
-        return {'added': true, 'alreadyExists': false};
-      },
-      // Strategy 5 — add without GPG verification (last resort)
-      () async {
-        await _run('flatpak', [
-          'remote-add', '--system', '--if-not-exists',
-          '--no-gpg-verify', _penshubRemote, _penshubUrl,
-        ]);
-        return {'added': true, 'alreadyExists': false, 'noGpg': true};
-      },
-    ]);
+      } on MissingPluginException {
+        _useProcessFallback = true;
+      }
+    }
+    // Fallback: use dart:io
+    return _ensureRemoteFallback();
   }
 
-  static Future<void> _fetchGpgKey() async {
-    await _chain<void>('fetchGpgKey', [
-      () async {
+  static Future<Map<String, dynamic>> _ensureRemoteFallback() async {
+    try {
+      // Check if penshub remote already exists
+      final remotes = await _run('flatpak', ['remote-list', '--system', '--columns=name']);
+      if (remotes.contains(_penshubRemote)) {
+        return {'added': false, 'alreadyExists': true};
+      }
+      // Download GPG key
+      try {
         await _run('wget', ['-q', '-O', _gpgTmpPath, _penshubGpgUrl]);
-      },
-      () async {
-        await _run('curl', ['-sfL', '-o', _gpgTmpPath, _penshubGpgUrl]);
-      },
-    ]);
+      } catch (_) {
+        try {
+          await _run('curl', ['-sfL', '-o', _gpgTmpPath, _penshubGpgUrl]);
+        } catch (_) {
+          // Add without GPG if we can't fetch the key
+          await _run('flatpak', [
+            'remote-add', '--system', '--if-not-exists',
+            '--no-gpg-verify', _penshubRemote, _penshubUrl,
+          ]);
+          return {'added': true, 'alreadyExists': false};
+        }
+      }
+      // Add with GPG verification
+      await _run('flatpak', [
+        'remote-add', '--system', '--if-not-exists',
+        '--gpg-import=$_gpgTmpPath', _penshubRemote, _penshubUrl,
+      ]);
+      return {'added': true, 'alreadyExists': false};
+    } catch (e) {
+      return {'added': false, 'alreadyExists': false, 'error': e.toString()};
+    }
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // INSTALL — multi-strategy
-  // ════════════════════════════════════════════════════════════════
-
+  // ── Install ─────────────────────────────────────────────────
   static Future<void> install(String appId, {String? remote}) async {
-    final r = remote ?? _penshubRemote;
-    await _chain<void>('install $appId', [
-      () async {
-        if (_useProcessFallback) throw Exception('native plugin unavailable');
+    if (!_useProcessFallback) {
+      try {
         await _channel.invokeMethod('installFlatpak', {
-          'appId': appId, if (remote != null) 'remote': remote,
+          'appId': appId,
+          if (remote != null) 'remote': remote,
         });
-      },
-      () async {
-        await _run('flatpak', [
-          'install', '--system', '--noninteractive', '-y', r, appId,
-        ]);
-      },
-      () async {
-        await _run('flatpak', [
-          'install', '--user', '--noninteractive', '-y', r, appId,
-        ]);
-      },
-      () async {
-        await _run('flatpak', [
-          'install', '--noninteractive', '-y', r, appId,
-        ]);
-      },
-    ]);
+        return;
+      } on MissingPluginException {
+        _useProcessFallback = true;
+      } on PlatformException catch (e) {
+        // Native plugin loaded but its install path errored. Fall back
+        // to the Dart `flatpak` invocation — same binary, but the
+        // resulting Exception carries the real stderr so callers /
+        // log viewer see why it failed.
+        debugPrint('Native install failed for $appId: ${e.message ?? e.code}; falling back to dart:io');
+      }
+    }
+    final r = remote ?? _penshubRemote;
+    try {
+      await _run('flatpak', [
+        'install', '--system', '--noninteractive', '-y', r, appId,
+      ]);
+      _emitDone(appId, ok: true);
+    } catch (e) {
+      _emitDone(appId, ok: false);
+      rethrow;
+    }
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // UNINSTALL — multi-strategy
-  // ════════════════════════════════════════════════════════════════
-
-  static Future<void> uninstall(String appId) async {
-    await _chain<void>('uninstall $appId', [
-      () async {
-        if (_useProcessFallback) throw Exception('native plugin unavailable');
-        await _channel.invokeMethod('uninstallFlatpak', {'appId': appId});
-      },
-      () async {
-        await _run('flatpak', [
-          'uninstall', '--system', '--noninteractive', '-y', appId,
-        ]);
-      },
-      () async {
-        await _run('flatpak', [
-          'uninstall', '--user', '--noninteractive', '-y', appId,
-        ]);
-      },
-      () async {
-        await _run('flatpak', [
-          'uninstall', '--noninteractive', '-y', appId,
-        ]);
-      },
-    ]);
-  }
-
-  // ════════════════════════════════════════════════════════════════
-  // LAUNCH — multi-strategy
-  // ════════════════════════════════════════════════════════════════
-
+  // ── Launch ──────────────────────────────────────────────────
   static Future<void> launch(String appId) async {
-    await _chain<void>('launch $appId', [
-      () async {
-        if (_useProcessFallback) throw Exception('native plugin unavailable');
+    if (!_useProcessFallback) {
+      try {
         await _channel.invokeMethod('launchFlatpak', {'appId': appId});
-      },
-      // Detached processes — fire & forget so the app doesn't block UI
-      () async {
-        final cmd = await _resolveAbsolute('flatpak') ?? 'flatpak';
-        await Process.start(cmd, ['run', appId],
-            mode: ProcessStartMode.detached);
-      },
-      () async {
-        final cmd = await _resolveAbsolute('flatpak') ?? 'flatpak';
-        await Process.start(cmd, ['run', '--user', appId],
-            mode: ProcessStartMode.detached);
-      },
-    ]);
+        return;
+      } on MissingPluginException {
+        _useProcessFallback = true;
+      } on PlatformException catch (e) {
+        debugPrint('Native launch failed for $appId: ${e.message ?? e.code}; falling back to dart:io');
+      }
+    }
+    // Fire and forget — don't await the launched app
+    Process.start('flatpak', ['run', appId],
+        mode: ProcessStartMode.detached);
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // IS INSTALLED — check via multiple scopes
-  // ════════════════════════════════════════════════════════════════
-
+  // ── Is installed ────────────────────────────────────────────
   static Future<bool> isInstalled(String appId) async {
-    // Try native first
     if (!_useProcessFallback) {
       try {
         final ok = await _channel.invokeMethod('isInstalled', {'appId': appId});
         return ok == true;
       } on MissingPluginException {
         _useProcessFallback = true;
-      } catch (_) {
-        // fall through to CLI
+      } on PlatformException catch (e) {
+        debugPrint('Native isInstalled failed for $appId: ${e.message ?? e.code}; falling back to dart:io');
       }
     }
-    // Try both scopes — true if found anywhere
-    for (final scope in ['--system', '--user']) {
-      try {
-        await _run('flatpak', ['info', scope, appId]);
-        return true;
-      } catch (_) {
-        /* not in this scope, try next */
-      }
+    try {
+      await _run('flatpak', ['info', '--system', appId]);
+      return true;
+    } catch (_) {
+      return false;
     }
-    return false;
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // LIST INSTALLED — merge system + user
-  // ════════════════════════════════════════════════════════════════
-
+  // ── List installed ──────────────────────────────────────────
   static Future<List<Map<String, String>>> listInstalled() async {
-    // Try native first
     if (!_useProcessFallback) {
       try {
-        final list =
-            await _channel.invokeMethod<List<dynamic>>('listInstalled');
+        final list = await _channel.invokeMethod<List<dynamic>>('listInstalled');
         return (list ?? []).map((e) {
           final m = Map<String, dynamic>.from(e);
           return {
@@ -327,65 +269,83 @@ class FlatpakPlatform {
         }).toList();
       } on MissingPluginException {
         _useProcessFallback = true;
-      } catch (_) {
-        // fall through to CLI
+      } on PlatformException catch (e) {
+        debugPrint('Native listInstalled failed: ${e.message ?? e.code}; falling back to dart:io');
       }
     }
-    // CLI: merge system + user installs, dedup by id
-    final seen = <String>{};
-    final result = <Map<String, String>>[];
-    for (final scope in ['--system', '--user']) {
+    // Fallback: parse flatpak list output
+    try {
+      final output = await _run('flatpak', [
+        'list', '--system', '--app', '--columns=application,name',
+      ]);
+      if (output.isEmpty) return [];
+      return output.split('\n').where((l) => l.trim().isNotEmpty).map((line) {
+        final parts = line.split('\t');
+        return {
+          'id': parts.isNotEmpty ? parts[0].trim() : '',
+          'name': parts.length > 1 ? parts[1].trim() : parts[0].trim(),
+        };
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // ── Uninstall ───────────────────────────────────────────────
+  static Future<void> uninstall(String appId) async {
+    if (!_useProcessFallback) {
       try {
-        final output = await _run('flatpak', [
-          'list', scope, '--app', '--columns=application,name',
-        ]);
-        if (output.isEmpty) continue;
-        for (final line in output.split('\n')) {
-          final trimmed = line.trim();
-          if (trimmed.isEmpty) continue;
-          final parts = trimmed.split('\t');
-          final id = parts.isNotEmpty ? parts[0].trim() : '';
-          if (id.isEmpty || seen.contains(id)) continue;
-          seen.add(id);
-          result.add({
-            'id': id,
-            'name': parts.length > 1 ? parts[1].trim() : id,
-          });
-        }
-      } catch (_) {
-        /* skip this scope */
+        await _channel.invokeMethod('uninstallFlatpak', {'appId': appId});
+        return;
+      } on MissingPluginException {
+        _useProcessFallback = true;
+      } on PlatformException catch (e) {
+        debugPrint('Native uninstall failed for $appId: ${e.message ?? e.code}; falling back to dart:io');
       }
     }
-    return result;
+    try {
+      await _run('flatpak', [
+        'uninstall', '--system', '--noninteractive', '-y', appId,
+      ]);
+      _emitDone(appId, ok: true);
+    } catch (e) {
+      _emitDone(appId, ok: false);
+      rethrow;
+    }
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // UPDATE — multi-strategy
-  // ════════════════════════════════════════════════════════════════
-
+  // ── Update ──────────────────────────────────────────────────
   static Future<void> update(String appId) async {
-    await _chain<void>('update $appId', [
-      () async {
-        if (_useProcessFallback) throw Exception('native plugin unavailable');
+    if (!_useProcessFallback) {
+      try {
         await _channel.invokeMethod('updateFlatpak', {'appId': appId});
-      },
-      () async {
-        await _run('flatpak', [
-          'update', '--system', '--noninteractive', '-y', appId,
-        ]);
-      },
-      () async {
-        await _run('flatpak', [
-          'update', '--user', '--noninteractive', '-y', appId,
-        ]);
-      },
-    ]);
+        return;
+      } on MissingPluginException {
+        _useProcessFallback = true;
+      } on PlatformException catch (e) {
+        debugPrint('Native update failed for $appId: ${e.message ?? e.code}; falling back to dart:io');
+      }
+    }
+    try {
+      await _run('flatpak', [
+        'update', '--system', '--noninteractive', '-y', appId,
+      ]);
+      _emitDone(appId, ok: true);
+    } catch (e) {
+      _emitDone(appId, ok: false);
+      rethrow;
+    }
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // REFRESH APPSTREAM — fire & forget, non-blocking
-  // ════════════════════════════════════════════════════════════════
-
+  // ── Refresh appstream ───────────────────────────────────────
+  /// Refreshes appstream metadata for each known remote.
+  ///
+  /// On AGL flutter-auto the native plugin is absent, so this falls back
+  /// to spawning `flatpak` per-remote. Each remote runs independently so
+  /// a failure on one (e.g. "No such ref appstream/ARCH in remote
+  /// penshub" when a remote doesn't publish appstream branches) does not
+  /// affect the others. stderr/stdout are captured and discarded so the
+  /// flutter-auto journal stays clean.
   static Future<void> refreshAppstream() async {
     if (!_useProcessFallback) {
       try {
@@ -393,15 +353,32 @@ class FlatpakPlatform {
         return;
       } on MissingPluginException {
         _useProcessFallback = true;
-      } catch (_) {/* fall through */}
+      }
     }
-    // Fire & forget both scopes
-    for (final scope in ['--system', '--user']) {
-      try {
-        final cmd = await _resolveAbsolute('flatpak') ?? 'flatpak';
-        await Process.start(cmd, ['update', scope, '--appstream'],
-            mode: ProcessStartMode.detached);
-      } catch (_) {/* skip */}
+    await Future.wait([
+      _silentAppstreamRefresh('flathub'),
+      _silentAppstreamRefresh(_penshubRemote),
+    ]);
+  }
+
+  /// Runs `flatpak update --appstream <remote>` swallowing all output and
+  /// any failure. Used for opportunistic appstream warmup; never throws.
+  static Future<void> _silentAppstreamRefresh(String remote) async {
+    final args = ['update', '--system', '--appstream', '-y', remote];
+    try {
+      await Process.run('flatpak', args);
+      return;
+    } on ProcessException {
+      // `flatpak` not in PATH (minimal systemd env on AGL) — try abs path
+    } catch (_) {
+      return;
+    }
+    final abs = await _resolveAbsolute('flatpak');
+    if (abs == null) return;
+    try {
+      await Process.run(abs, args);
+    } catch (_) {
+      // intentionally ignored
     }
   }
 }

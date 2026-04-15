@@ -16,6 +16,7 @@ static const char *kMethodUninstall = "uninstallFlatpak";
 static const char *kMethodUpdate = "updateFlatpak";
 static const char *kMethodEnsureRemote = "ensureRemote";
 static const char *kMethodRefreshAppstream = "refreshAppstream";
+static const char *kMethodPing = "ping";
 static const char *kEventsChannelName = "com.pens.flatpak/installer_events";
 
 static const char *kFlatpakRemote = "penshub";
@@ -317,6 +318,18 @@ static void method_call_cb(FlMethodChannel *channel,
 
     const gchar *method = fl_method_call_get_name(method_call);
 
+    // ---- ping() -> bool ----
+    // No-op probe used by Dart to verify the native plugin is loaded
+    // without spawning any subprocesses (whose stderr would leak to logs).
+    if (g_strcmp0(method, kMethodPing) == 0)
+    {
+        FlValue *result = fl_value_new_bool(TRUE);
+        g_autoptr(FlMethodResponse) resp =
+            FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+        fl_method_call_respond(method_call, resp, nullptr);
+        return;
+    }
+
     // ---- ensureRemote() -> {added: bool, error: string?} ----
     // Sets up BOTH penshub and flathub remotes so the user can switch
     // sources without manual flatpak configuration.
@@ -381,15 +394,24 @@ static void method_call_cb(FlMethodChannel *channel,
     // the driver never needs to touch a terminal.
     if (g_strcmp0(method, kMethodRefreshAppstream) == 0)
     {
+        // Refresh appstream metadata for both remotes. Some remotes (e.g.
+        // penshub) don't publish appstream branches, so failures are
+        // expected and harmless — silence stdout/stderr so the
+        // "No such ref appstream/<arch>" error does not leak to logs.
+        const GSpawnFlags quiet_flags = (GSpawnFlags)(
+            G_SPAWN_SEARCH_PATH |
+            G_SPAWN_STDOUT_TO_DEV_NULL |
+            G_SPAWN_STDERR_TO_DEV_NULL);
+
         const char *pens_argv[] = {
             "flatpak", "update", "--appstream", "--user", kFlatpakRemote, nullptr};
         g_spawn_async(nullptr, (gchar **)pens_argv, nullptr,
-                      G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, nullptr);
+                      quiet_flags, nullptr, nullptr, nullptr, nullptr);
 
         const char *flat_argv[] = {
             "flatpak", "update", "--appstream", "--user", kFlathubRemote, nullptr};
         g_spawn_async(nullptr, (gchar **)flat_argv, nullptr,
-                      G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, nullptr);
+                      quiet_flags, nullptr, nullptr, nullptr, nullptr);
 
         g_autoptr(FlMethodResponse) resp =
             FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(TRUE)));

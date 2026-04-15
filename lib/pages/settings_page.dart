@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../services/theme_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../widgets/pressable.dart';
+import 'about_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -105,10 +107,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: '3849f1c6-f27f-4652-94ea-f86919b44420',
                 ),
                 const SizedBox(height: AppSpacing.lg),
-                _InfoRow(
-                  title: 'App Store Version',
-                  value: 'Version 1.2.3',
-                ),
+                _AboutLink(),
 
                 const SizedBox(height: 100),
               ],
@@ -190,6 +189,70 @@ class _InfoRow extends StatelessWidget {
         const SizedBox(height: 2),
         Text(value, style: theme.textTheme.bodyMedium),
       ],
+    );
+  }
+}
+
+/// Link row navigating to the full About page (system info, versions).
+class _AboutLink extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Pressable(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const AboutPage()),
+      ),
+      pressedScale: 0.98,
+      child: Container(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        decoration: BoxDecoration(
+          color: context.colors.card,
+          borderRadius: BorderRadius.circular(AppSpacing.rMd),
+          border: Border.all(color: context.colors.border),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: context.colors.cardEl,
+                borderRadius: BorderRadius.circular(AppSpacing.rSm),
+              ),
+              child: Icon(Icons.info_outline_rounded,
+                  size: 18, color: context.colors.textS),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'ABOUT',
+                    style: TextStyle(
+                      color: context.colors.textT,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Versions, system info',
+                    style: TextStyle(
+                      color: context.colors.textP,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded,
+                color: context.colors.textT, size: 20),
+          ],
+        ),
+      ),
     );
   }
 }
