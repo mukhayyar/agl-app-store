@@ -175,27 +175,39 @@ class _AppDetailPageState extends State<AppDetailPage> {
                       ),
                       // Icon
                       Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(AppSpacing.xl),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(AppSpacing.rXxl),
-                            border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.20)),
+                        child: Hero(
+                          tag: 'app-icon-${_pkg.flatpakId}',
+                          child: Container(
+                            padding: const EdgeInsets.all(AppSpacing.xl),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.15),
+                              borderRadius:
+                                  BorderRadius.circular(AppSpacing.rXxl),
+                              border: Border.all(
+                                  color:
+                                      Colors.white.withValues(alpha: 0.20)),
+                            ),
+                            child: _pkg.icon != null
+                                ? CachedNetworkImage(
+                                    imageUrl: _pkg.icon!,
+                                    width: 80,
+                                    height: 80,
+                                    memCacheWidth: 160,
+                                    fit: BoxFit.contain,
+                                    fadeInDuration:
+                                        const Duration(milliseconds: 220),
+                                    placeholder: (_, __) => const Icon(
+                                        Icons.apps_rounded,
+                                        size: 80,
+                                        color: Colors.white54),
+                                    errorWidget: (_, __, ___) => const Icon(
+                                        Icons.apps_rounded,
+                                        size: 80,
+                                        color: Colors.white54),
+                                  )
+                                : const Icon(Icons.apps_rounded,
+                                    size: 80, color: Colors.white54),
                           ),
-                          child: _pkg.icon != null
-                              ? CachedNetworkImage(
-                                  imageUrl: _pkg.icon!, width: 80, height: 80,
-                                  memCacheWidth: 160, fit: BoxFit.contain,
-                                  placeholder: (_, __) => const Icon(
-                                      Icons.apps_rounded, size: 80,
-                                      color: Colors.white54),
-                                  errorWidget: (_, __, ___) => const Icon(
-                                      Icons.apps_rounded, size: 80,
-                                      color: Colors.white54),
-                                )
-                              : const Icon(Icons.apps_rounded, size: 80,
-                                  color: Colors.white54),
                         ),
                       ),
                     ],
@@ -216,6 +228,10 @@ class _AppDetailPageState extends State<AppDetailPage> {
                         Text('by ${_pkg.developerName}',
                             style: Theme.of(context).textTheme.bodyMedium),
                       ],
+                      if (_pkg.isVerified) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        const _VerifiedBadge(),
+                      ],
                       if (_pkg.summary != null) ...[
                         const SizedBox(height: AppSpacing.md),
                         Text(_pkg.summary!,
@@ -227,8 +243,10 @@ class _AppDetailPageState extends State<AppDetailPage> {
                 ),
 
                 // META PILLS
-                if (_pkg.version != null || _pkg.license != null ||
-                    _pkg.categories.isNotEmpty)
+                if (_pkg.version != null ||
+                    _pkg.license != null ||
+                    _pkg.categories.isNotEmpty ||
+                    _pkg.expiresAt != null)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(
                         AppSpacing.pageH, AppSpacing.lg, AppSpacing.pageH, 0),
@@ -242,6 +260,8 @@ class _AppDetailPageState extends State<AppDetailPage> {
                         if (_pkg.license != null)
                           _Pill(Icons.gavel_rounded, _pkg.license!,
                               accent: AppColors.accentGreen),
+                        if (_pkg.expiresAt != null)
+                          _ExpiryPill(date: _pkg.expiresAt!),
                         for (final c in _pkg.categories.take(2))
                           _Pill(Icons.label_rounded, c,
                               accent: AppColors.brandLight),
@@ -294,20 +314,48 @@ class _AppDetailPageState extends State<AppDetailPage> {
                           const SizedBox(width: AppSpacing.md),
                       itemBuilder: (_, i) => RepaintBoundary(
                         key: ValueKey('ss_$i'),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(AppSpacing.rMd),
-                          child: CachedNetworkImage(
-                            imageUrl: _pkg.screenshots[i],
-                            width: 300, height: 220,
-                            memCacheWidth: 600, fit: BoxFit.cover,
-                            placeholder: (_, __) => Container(
-                                width: 300, height: 220,
-                                color: context.colors.cardEl),
-                            errorWidget: (_, __, ___) => Container(
-                                width: 300, height: 220,
-                                color: context.colors.cardEl,
-                                child: Icon(Icons.broken_image_rounded,
-                                    color: context.colors.textT)),
+                        child: GestureDetector(
+                          onTap: () => _openScreenshotViewer(context, i),
+                          child: Stack(
+                            children: [
+                              ClipRRect(
+                                borderRadius:
+                                    BorderRadius.circular(AppSpacing.rMd),
+                                child: CachedNetworkImage(
+                                  imageUrl: _pkg.screenshots[i],
+                                  width: 300,
+                                  height: 220,
+                                  memCacheWidth: 600,
+                                  fit: BoxFit.cover,
+                                  placeholder: (_, __) => Container(
+                                      width: 300,
+                                      height: 220,
+                                      color: context.colors.cardEl),
+                                  errorWidget: (_, __, ___) => Container(
+                                      width: 300,
+                                      height: 220,
+                                      color: context.colors.cardEl,
+                                      child: Icon(
+                                          Icons.broken_image_rounded,
+                                          color: context.colors.textT)),
+                                ),
+                              ),
+                              Positioned(
+                                right: 8,
+                                bottom: 8,
+                                child: Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black
+                                        .withValues(alpha: 0.55),
+                                    borderRadius: BorderRadius.circular(
+                                        AppSpacing.rFull),
+                                  ),
+                                  child: const Icon(Icons.zoom_in_rounded,
+                                      color: Colors.white, size: 16),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -378,6 +426,29 @@ class _AppDetailPageState extends State<AppDetailPage> {
                                           ? context.colors.textP : Colors.white,
                                       fontSize: 22, fontWeight: FontWeight.w700),
                                 ),
+                                if (!installed &&
+                                    _pkg.formattedDownloadSize != null) ...[
+                                  const SizedBox(width: AppSpacing.sm),
+                                  Container(
+                                    width: 4,
+                                    height: 4,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white
+                                          .withValues(alpha: 0.55),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: AppSpacing.sm),
+                                  Text(
+                                    _pkg.formattedDownloadSize!,
+                                    style: TextStyle(
+                                      color: Colors.white
+                                          .withValues(alpha: 0.85),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ]),
                       ),
                     ),
@@ -388,6 +459,144 @@ class _AppDetailPageState extends State<AppDetailPage> {
           ),
         );
       },
+    );
+  }
+
+  void _openScreenshotViewer(BuildContext context, int initialIndex) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black87,
+        transitionDuration: const Duration(milliseconds: 220),
+        reverseTransitionDuration: const Duration(milliseconds: 180),
+        pageBuilder: (_, __, ___) => _ScreenshotViewer(
+          urls: _pkg.screenshots,
+          initialIndex: initialIndex,
+        ),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════ Screenshot Viewer ═══════════════════════════
+/// Fullscreen modal that displays screenshots in a swipeable PageView with
+/// pinch-to-zoom support and a floating close button.
+class _ScreenshotViewer extends StatefulWidget {
+  final List<String> urls;
+  final int initialIndex;
+  const _ScreenshotViewer({
+    required this.urls,
+    required this.initialIndex,
+  });
+
+  @override
+  State<_ScreenshotViewer> createState() => _ScreenshotViewerState();
+}
+
+class _ScreenshotViewerState extends State<_ScreenshotViewer> {
+  late final PageController _ctl =
+      PageController(initialPage: widget.initialIndex);
+  late int _current = widget.initialIndex;
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          // Tap-outside-image to close
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => Navigator.of(context).maybePop(),
+            ),
+          ),
+          // Swipeable, pinch-zoom pages
+          PageView.builder(
+            controller: _ctl,
+            physics: const BouncingScrollPhysics(),
+            itemCount: widget.urls.length,
+            onPageChanged: (i) => setState(() => _current = i),
+            itemBuilder: (_, i) => InteractiveViewer(
+              minScale: 1.0,
+              maxScale: 4.0,
+              child: Center(
+                child: CachedNetworkImage(
+                  imageUrl: widget.urls[i],
+                  fit: BoxFit.contain,
+                  placeholder: (_, __) => const Center(
+                      child: CircularProgressIndicator(
+                          color: Colors.white)),
+                  errorWidget: (_, __, ___) => const Icon(
+                      Icons.broken_image_rounded,
+                      color: Colors.white54,
+                      size: 64),
+                ),
+              ),
+            ),
+          ),
+          // Page indicator (only when multiple)
+          if (widget.urls.length > 1)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 24,
+              child: SafeArea(
+                top: false,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      borderRadius:
+                          BorderRadius.circular(AppSpacing.rFull),
+                    ),
+                    child: Text(
+                      '${_current + 1} / ${widget.urls.length}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          // Floating close button (top-right)
+          Positioned(
+            top: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: Material(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () => Navigator.of(context).maybePop(),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(Icons.close_rounded,
+                          color: Colors.white, size: 24),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -415,4 +624,99 @@ class _Pill extends StatelessWidget {
       ]),
     );
   }
+}
+
+// ─── Verified by PensHub badge ───────────────────────────────────────
+class _VerifiedBadge extends StatelessWidget {
+  const _VerifiedBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    const tint = AppColors.accentGreen;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md, vertical: 6),
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppSpacing.rFull),
+        border: Border.all(color: tint.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.verified_rounded, size: 16, color: tint),
+          SizedBox(width: 6),
+          Text(
+            'Verified by PensHub',
+            style: TextStyle(
+              color: tint,
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Expiry pill (color-codes near/expired) ──────────────────────────
+class _ExpiryPill extends StatelessWidget {
+  final DateTime date;
+  const _ExpiryPill({required this.date});
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final days = date.difference(now).inDays;
+
+    final (Color color, String label, IconData icon) = switch (days) {
+      < 0 => (
+        AppColors.danger,
+        'Expired ${_fmtDate(date)}',
+        Icons.error_outline_rounded
+      ),
+      < 30 => (
+        AppColors.warning,
+        'Expires in ${days == 0 ? '<1 day' : '$days day${days == 1 ? '' : 's'}'}',
+        Icons.schedule_rounded
+      ),
+      _ => (
+        AppColors.accentCyan,
+        'Expires ${_fmtDate(date)}',
+        Icons.event_rounded
+      ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppSpacing.rFull),
+        border: Border.all(color: color.withValues(alpha: 0.20)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
+          Text(label,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w700,
+                  )),
+        ],
+      ),
+    );
+  }
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+
+  static String _fmtDate(DateTime d) =>
+      '${_months[d.month - 1]} ${d.day}, ${d.year}';
 }

@@ -22,10 +22,10 @@ class AppColors {
   static const Color surfaceElevated = Color(0xFFF0F2F8);
   static const Color surfaceBright = Color(0xFFE8EAF0);
 
-  // Dark surfaces (used by dark theme)
-  static const Color backgroundDark = Color(0xFF0A0E1A);
-  static const Color surfaceDark = Color(0xFF131829);
-  static const Color surfaceElevatedDark = Color(0xFF1A2035);
+  // Dark surfaces — Tesla-inspired cool-neutral grayscale
+  static const Color backgroundDark = Color(0xFF05060A);
+  static const Color surfaceDark = Color(0xFF0F1116);
+  static const Color surfaceElevatedDark = Color(0xFF171921);
 
   // Text
   static const Color textPrimary = Color(0xFF1A1B2E);
@@ -36,7 +36,7 @@ class AppColors {
   // Borders
   static const Color border = Color(0xFFE5E7EB);
   static const Color borderBright = Color(0xFFD1D5DB);
-  static const Color borderDark = Color(0xFF1E2540);
+  static const Color borderDark = Color(0xFF23262F);
 
   // States
   static const Color success = Color(0xFF00C853);
@@ -81,7 +81,7 @@ class _Adaptive {
   Color get card => _dark ? AppColors.surfaceDark : AppColors.surface;
   Color get cardEl => _dark ? AppColors.surfaceElevatedDark : AppColors.surfaceElevated;
   Color get border => _dark ? AppColors.borderDark : AppColors.border;
-  Color get textP => _dark ? const Color(0xFFF1F3F8) : AppColors.textPrimary;
-  Color get textS => _dark ? const Color(0xFF8B93A8) : AppColors.textSecondary;
-  Color get textT => _dark ? const Color(0xFF4A5168) : AppColors.textTertiary;
+  Color get textP => _dark ? const Color(0xFFFFFFFF) : AppColors.textPrimary;
+  Color get textS => _dark ? const Color(0xFFA0A5B3) : AppColors.textSecondary;
+  Color get textT => _dark ? const Color(0xFF5A6070) : AppColors.textTertiary;
 }

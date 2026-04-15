@@ -105,6 +105,17 @@ class FlatpakLoaded extends FlatpakState {
   final Set<String> uninstallingIds;
   final Map<String, int> installProgress;
 
+  /// True while a transient, long-running refresh is underway on top of
+  /// the currently-rendered data (e.g. catalog source switch). The UI
+  /// can keep showing existing items with a skeleton overlay instead of
+  /// blanking the whole screen, and the dynamic island can show a
+  /// "Switching to X" op.
+  final bool isLoading;
+
+  /// When [isLoading] is true because of a source switch, this is the
+  /// source we're switching *to*. Null otherwise.
+  final AppSource? pendingSource;
+
   const FlatpakLoaded({
     required this.items,
     required this.page,
@@ -116,6 +127,8 @@ class FlatpakLoaded extends FlatpakState {
     this.installingIds = const {},
     this.uninstallingIds = const {},
     this.installProgress = const {},
+    this.isLoading = false,
+    this.pendingSource,
   });
 
   FlatpakLoaded copyWith({
@@ -129,6 +142,9 @@ class FlatpakLoaded extends FlatpakState {
     Set<String>? installingIds,
     Set<String>? uninstallingIds,
     Map<String, int>? installProgress,
+    bool? isLoading,
+    AppSource? pendingSource,
+    bool clearPendingSource = false,
   }) {
     return FlatpakLoaded(
       items: items ?? this.items,
@@ -141,6 +157,9 @@ class FlatpakLoaded extends FlatpakState {
       installingIds: installingIds ?? this.installingIds,
       uninstallingIds: uninstallingIds ?? this.uninstallingIds,
       installProgress: installProgress ?? this.installProgress,
+      isLoading: isLoading ?? this.isLoading,
+      pendingSource:
+          clearPendingSource ? null : (pendingSource ?? this.pendingSource),
     );
   }
 
@@ -156,6 +175,8 @@ class FlatpakLoaded extends FlatpakState {
     installingIds,
     uninstallingIds,
     installProgress,
+    isLoading,
+    pendingSource,
   ];
 }
 
@@ -326,13 +347,38 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
     on<SwitchSource>((event, emit) async {
       if (repo.currentSource == event.source) return;
 
-      emit(FlatpakLoading());
+      // Stay in FlatpakLoaded with isLoading=true and pendingSource set
+      // so the UI can show skeleton placeholders over the existing list
+      // and the dynamic island can surface "Switching to X". Install /
+      // uninstall ops are global to the device and are preserved
+      // automatically by copyWith since we don't touch those fields.
+      final prev = state;
+      if (prev is FlatpakLoaded) {
+        emit(prev.copyWith(
+          isLoading: true,
+          pendingSource: event.source,
+        ));
+      } else {
+        // Cold start fallback (no prior loaded state to sit on)
+        emit(FlatpakLoading());
+      }
+
       await repo.setSource(event.source); // wipes cache internally
       await repo.refreshAllApps();
 
       final installed = await repo.installedIds();
       final first = await repo.getPage(page: 1, pageSize: _pageSize);
       final total = await repo.totalCount();
+
+      // Re-read ops from current state (may have changed during await)
+      final cur = state;
+      final keepInstalling =
+          cur is FlatpakLoaded ? cur.installingIds : const <String>{};
+      final keepUninstalling =
+          cur is FlatpakLoaded ? cur.uninstallingIds : const <String>{};
+      final keepProgress = cur is FlatpakLoaded
+          ? cur.installProgress
+          : const <String, int>{};
 
       emit(
         FlatpakLoaded(
@@ -341,7 +387,11 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
           pageSize: _pageSize,
           hasMore: first.length < total,
           installed: installed,
+          installingIds: keepInstalling,
+          uninstallingIds: keepUninstalling,
+          installProgress: keepProgress,
           source: repo.currentSource,
+          // isLoading: false, pendingSource: null (defaults)
         ),
       );
 
@@ -365,6 +415,10 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
         ),
       );
 
+      // The 'done' event arrives via the install events stream — from
+      // the native plugin's EventChannel (desktop) or from a synthetic
+      // event emitted by the Dart fallback in FlatpakPlatform (AGL).
+      // We only need to handle outright failure here.
       repo.install(id).catchError((_) {
         add(_InstallFinished(id, false));
       });
@@ -452,7 +506,24 @@ class FlatpakBloc extends Bloc<FlatpakEvent, FlatpakState> {
           }
 
           if (type == 'done') {
-            add(_InstallFinished(appId, m['status'] == 0));
+            // Native plugin and synthetic fallback both emit a generic
+            // 'done' event without declaring install vs uninstall.
+            // Disambiguate by checking which set the id is currently in.
+            // Fall back to both if we can't tell (idempotent).
+            final ok = m['status'] == 0;
+            final s = state;
+            if (s is FlatpakLoaded) {
+              if (s.uninstallingIds.contains(appId)) {
+                add(_UninstallFinished(appId, ok));
+              } else if (s.installingIds.contains(appId)) {
+                add(_InstallFinished(appId, ok));
+              } else {
+                // Safety net: fire both so nothing is left hanging if
+                // the state was transiently out of sync.
+                add(_InstallFinished(appId, ok));
+                add(_UninstallFinished(appId, ok));
+              }
+            }
             return;
           }
 

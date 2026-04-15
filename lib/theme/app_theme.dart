@@ -133,18 +133,20 @@ class AppTheme {
     );
   }
 
-  /// Dark theme — same structure, swapped surface/text colors.
+  /// Dark theme — Tesla-inspired neutral near-black palette.
+  /// Shifts from navy-tinted to pure-neutral grayscale for the cockpit
+  /// feel: #000 scaffold, warm-neutral surfaces, hairline borders.
   static ThemeData dark() {
     final base = ThemeData.dark(useMaterial3: true);
     final text = AppTypography.buildDark(base.textTheme);
 
-    const bg = Color(0xFF0A0E1A);
-    const surface = Color(0xFF131829);
-    const surfaceEl = Color(0xFF1A2035);
-    const border = Color(0xFF1E2540);
-    const textP = Color(0xFFF1F3F8);
-    const textS = Color(0xFF8B93A8);
-    const textT = Color(0xFF4A5168);
+    const bg = Color(0xFF05060A);       // near-pure black
+    const surface = Color(0xFF0F1116);  // cool neutral gray
+    const surfaceEl = Color(0xFF171921);// elevated cool gray
+    const border = Color(0xFF23262F);   // hairline divider
+    const textP = Color(0xFFFFFFFF);    // pure white
+    const textS = Color(0xFFA0A5B3);    // cool light gray
+    const textT = Color(0xFF5A6070);    // cool mid gray
 
     return base.copyWith(
       scaffoldBackgroundColor: bg,
