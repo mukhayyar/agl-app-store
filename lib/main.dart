@@ -497,7 +497,7 @@ class _ShellState extends State<_Shell> {
                         crossAxisCount: 2,
                         crossAxisSpacing: AppSpacing.md,
                         mainAxisSpacing: AppSpacing.md,
-                        mainAxisExtent: 80,
+                        mainAxisExtent: 96,
                       ),
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
@@ -929,6 +929,8 @@ class _AppTile extends StatelessWidget {
             const SizedBox(width: AppSpacing.md),
             Expanded(
               child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
