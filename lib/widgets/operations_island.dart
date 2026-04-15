@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../bloc/flatpak_bloc.dart';
+import '../services/user_log.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
@@ -41,6 +42,7 @@ class _OperationsIslandState extends State<OperationsIsland>
           return p.installingIds != c.installingIds ||
               p.uninstallingIds != c.uninstallingIds ||
               p.installProgress != c.installProgress ||
+              p.installPhase != c.installPhase ||
               p.isLoading != c.isLoading ||
               p.pendingSource != c.pendingSource;
         }
@@ -86,8 +88,17 @@ class _OperationsIslandState extends State<OperationsIsland>
                     child: _Island(
                       ops: ops,
                       expanded: _expanded,
-                      onTap: () => setState(() => _expanded = !_expanded),
-                      onClose: () => setState(() => _expanded = false),
+                      onTap: () {
+                        UserLog.tap('island.toggle', {
+                          'to': _expanded ? 'collapsed' : 'expanded',
+                          'ops': ops.length,
+                        });
+                        setState(() => _expanded = !_expanded);
+                      },
+                      onClose: () {
+                        UserLog.tap('island.collapse');
+                        setState(() => _expanded = false);
+                      },
                     ),
                   ),
           ),
@@ -123,6 +134,7 @@ class _OperationsIslandState extends State<OperationsIsland>
         name: byId[id] ?? id,
         kind: _OpKind.install,
         progress: s.installProgress[id],
+        phase: s.installPhase[id],
       ));
     }
     for (final id in s.uninstallingIds) {
@@ -168,12 +180,15 @@ class _Island extends StatelessWidget {
               decoration: BoxDecoration(
                 color: base,
                 borderRadius: BorderRadius.circular(expanded ? 22 : 28),
-                boxShadow: [
+                // Tight shadow — blur 18 was causing 30 fps drops on
+                // the Pi 4's VideoCore VI whenever the pill animated;
+                // blur area scales quadratically so blur 6 costs ~9×
+                // less fill per frame and still reads as elevated.
+                boxShadow: const [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.35),
-                    blurRadius: 18,
-                    spreadRadius: 0,
-                    offset: const Offset(0, 6),
+                    color: Color(0x55000000),
+                    blurRadius: 6,
+                    offset: Offset(0, 3),
                   ),
                 ],
               ),
@@ -204,6 +219,8 @@ class _CollapsedPill extends StatelessWidget {
     final extras = ops.length - 1;
     final percent = primary.progress;
     final hasProgress = percent != null && percent > 0;
+
+    final verb = primary.verb;
 
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -245,8 +262,8 @@ class _CollapsedPill extends StatelessWidget {
           Flexible(
             child: Text(
               extras > 0
-                  ? '${primary.kind.verb} ${primary.name} +$extras'
-                  : '${primary.kind.verb} ${primary.name}',
+                  ? '$verb ${primary.name} +$extras'
+                  : '$verb ${primary.name}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -370,8 +387,8 @@ class _OpRow extends StatelessWidget {
                   op.kind == _OpKind.switching
                       ? 'Loading catalog…'
                       : hasProgress
-                          ? '${op.kind.verb} • $percent%'
-                          : '${op.kind.verb}…',
+                          ? '${op.verb} • $percent%'
+                          : '${op.verb}…',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.65),
                     fontSize: 11,
@@ -421,10 +438,23 @@ class _Op {
   final String name;
   final _OpKind kind;
   final int? progress;
+  final InstallPhase? phase;
   const _Op({
     required this.id,
     required this.name,
     required this.kind,
     this.progress,
+    this.phase,
   });
+
+  /// Verb that respects the current install phase so the pill reads
+  /// "Downloading {app}" while flatpak is pulling refs and flips to
+  /// "Installing {app}" once it starts deploying. Falls back to the
+  /// kind's default verb when no phase is reported (desktop / native).
+  String get verb {
+    if (kind == _OpKind.install && phase == InstallPhase.downloading) {
+      return 'Downloading';
+    }
+    return kind.verb;
+  }
 }

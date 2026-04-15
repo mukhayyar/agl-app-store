@@ -6,6 +6,7 @@ import '../bloc/flatpak_bloc.dart';
 import '../data/flatpak_repository.dart';
 import '../models/app_source.dart';
 import '../models/flatpak_package.dart';
+import '../services/user_log.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/pressable.dart';
@@ -218,16 +219,20 @@ class _CatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Pressable(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => _ResultsPage(
-            ui: cat.ui,
-            api: cat.api,
-            source: source,
+      onTap: () {
+        UserLog.tap('category.open',
+            {'name': cat.ui, 'api': cat.api, 'source': source.label});
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => _ResultsPage(
+              ui: cat.ui,
+              api: cat.api,
+              source: source,
+            ),
           ),
-        ),
-      ),
+        );
+      },
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppSpacing.rXl),
@@ -359,10 +364,14 @@ class _ResultsPage extends StatelessWidget {
               return RepaintBoundary(
                 key: ValueKey(app.id),
                 child: Pressable(
-                  onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (_) => AppDetailPage(package: app))),
+                  onTap: () {
+                    UserLog.tap('category.result.open',
+                        {'id': app.flatpakId});
+                    Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => AppDetailPage(package: app)));
+                  },
                   child: Container(
                     padding: const EdgeInsets.all(AppSpacing.md),
                     decoration: BoxDecoration(
@@ -386,6 +395,7 @@ class _ResultsPage extends StatelessWidget {
                                   width: 28,
                                   height: 28,
                                   memCacheWidth: 56,
+                                  memCacheHeight: 56,
                                   fit: BoxFit.contain,
                                   placeholder: (_, __) => const Icon(
                                       Icons.apps_rounded,

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/user_log.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/pressable.dart';
@@ -191,6 +192,7 @@ class _AboutPageState extends State<AboutPage> {
   }) {
     return Pressable(
       onTap: () {
+        UserLog.tap('about.copy', {'label': label});
         Clipboard.setData(ClipboardData(text: value));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
