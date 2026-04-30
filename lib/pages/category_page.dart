@@ -16,9 +16,12 @@ import 'app_detail_page.dart';
 ///
 /// PensHub and Flathub expose different category sets via different APIs:
 ///   - PensHub:  GET /apps?category=NAME — backend `seed_apps.py:35-48`
-///                (12 categories incl. Settings, Accessibility)
+///                (12 categories incl. Settings, Accessibility, capitalized)
 ///   - Flathub:  GET /collection/category/NAME — flathub.org/api/v2
-///                (12 freedesktop main + Audio/Video subcategories)
+///                MainCategory enum is lowercase: audiovideo, development,
+///                education, game, graphics, network, office, science,
+///                system, utility (10 entries — Audio/Video are subcategories
+///                under audiovideo, not main categories).
 ///
 /// The card grid switches automatically when the source toggle changes.
 class CategoriesPage extends StatelessWidget {
@@ -52,31 +55,27 @@ class CategoriesPage extends StatelessWidget {
         [Color(0xFF00C853), Color(0xFF6C5CE7)], 'Inclusive tools'),
   ];
 
-  // ── Flathub catalog (freedesktop main categories) ───────────────────
+  // ── Flathub catalog (v2 MainCategory enum — lowercase) ──────────────
   static const _flathubCats = <_Cat>[
-    _Cat('Music & Video', 'AudioVideo', Icons.movie_creation_rounded,
-        [Color(0xFFE040FB), Color(0xFF7C4DFF)], 'Mixed media apps'),
-    _Cat('Audio', 'Audio', Icons.music_note_rounded,
-        [Color(0xFFFF6B9D), Color(0xFFFF9F43)], 'Players & editors'),
-    _Cat('Video', 'Video', Icons.videocam_rounded,
-        [Color(0xFF7C4DFF), Color(0xFF00B4D8)], 'Watch & edit'),
-    _Cat('Developer', 'Development', Icons.code_rounded,
+    _Cat('Music & Video', 'audiovideo', Icons.movie_creation_rounded,
+        [Color(0xFFE040FB), Color(0xFF7C4DFF)], 'Players & editors'),
+    _Cat('Developer', 'development', Icons.code_rounded,
         [Color(0xFF00B4D8), Color(0xFF6C5CE7)], 'IDEs & tools'),
-    _Cat('Learning', 'Education', Icons.school_rounded,
+    _Cat('Learning', 'education', Icons.school_rounded,
         [Color(0xFFFF9F43), Color(0xFFFF6B9D)], 'Courses & ref'),
-    _Cat('Games', 'Game', Icons.sports_esports_rounded,
+    _Cat('Games', 'game', Icons.sports_esports_rounded,
         [Color(0xFFA29BFE), Color(0xFFFF6B9D)], 'Action & arcade'),
-    _Cat('Graphics', 'Graphics', Icons.brush_rounded,
+    _Cat('Graphics', 'graphics', Icons.brush_rounded,
         [Color(0xFF00C853), Color(0xFF00B4D8)], 'Art & design'),
-    _Cat('Network', 'Network', Icons.public_rounded,
+    _Cat('Network', 'network', Icons.public_rounded,
         [Color(0xFF00B4D8), Color(0xFF00E676)], 'Web & chat'),
-    _Cat('Productivity', 'Office', Icons.work_rounded,
+    _Cat('Productivity', 'office', Icons.work_rounded,
         [Color(0xFF00D4FF), Color(0xFF00E676)], 'Docs & email'),
-    _Cat('Science', 'Science', Icons.science_rounded,
+    _Cat('Science', 'science', Icons.science_rounded,
         [Color(0xFF00E676), Color(0xFF00D4FF)], 'Research & math'),
-    _Cat('System', 'System', Icons.memory_rounded,
+    _Cat('System', 'system', Icons.memory_rounded,
         [Color(0xFF6C5CE7), Color(0xFFA29BFE)], 'OS & monitoring'),
-    _Cat('Utilities', 'Utility', Icons.layers_rounded,
+    _Cat('Utilities', 'utility', Icons.layers_rounded,
         [Color(0xFF6C5CE7), Color(0xFFFF6B9D)], 'Handy helpers'),
   ];
 

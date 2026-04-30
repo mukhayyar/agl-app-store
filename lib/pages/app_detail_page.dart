@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../bloc/flatpak_bloc.dart';
@@ -543,117 +544,225 @@ class _ScreenshotViewerState extends State<_ScreenshotViewer> {
   late final PageController _ctl =
       PageController(initialPage: widget.initialIndex);
   late int _current = widget.initialIndex;
+  // Focus node for keyboard navigation (← / → / Esc).
+  final FocusNode _focusNode = FocusNode();
 
   @override
   void dispose() {
     _ctl.dispose();
+    _focusNode.dispose();
     super.dispose();
+  }
+
+  bool get _hasPrev => _current > 0;
+  bool get _hasNext => _current < widget.urls.length - 1;
+
+  void _go(int delta) {
+    final target = _current + delta;
+    if (target < 0 || target >= widget.urls.length) return;
+    _ctl.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  KeyEventResult _onKey(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final k = event.logicalKey;
+    if (k == LogicalKeyboardKey.arrowRight) {
+      UserLog.tap('screenshot-viewer.key', {'key': 'right'});
+      _go(1);
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.arrowLeft) {
+      UserLog.tap('screenshot-viewer.key', {'key': 'left'});
+      _go(-1);
+      return KeyEventResult.handled;
+    }
+    if (k == LogicalKeyboardKey.escape) {
+      UserLog.tap('screenshot-viewer.dismiss', {'src': 'esc'});
+      Navigator.of(context).maybePop();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Stack(
-        children: [
-          // Tap-outside-image to close
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                UserLog.tap('screenshot-viewer.dismiss');
-                Navigator.of(context).maybePop();
-              },
+    final multi = widget.urls.length > 1;
+    return Focus(
+      autofocus: true,
+      focusNode: _focusNode,
+      onKeyEvent: _onKey,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            // Tap-outside-image to close
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  UserLog.tap('screenshot-viewer.dismiss');
+                  Navigator.of(context).maybePop();
+                },
+              ),
             ),
-          ),
-          // Swipeable, pinch-zoom pages
-          PageView.builder(
-            controller: _ctl,
-            physics: const BouncingScrollPhysics(),
-            itemCount: widget.urls.length,
-            onPageChanged: (i) => setState(() => _current = i),
-            itemBuilder: (_, i) => InteractiveViewer(
-              minScale: 1.0,
-              maxScale: 4.0,
-              child: Center(
-                child: CachedNetworkImage(
-                  imageUrl: widget.urls[i],
-                  fit: BoxFit.contain,
-                  // Cap decode at 1280 px wide. Without this the Pi's
-                  // VideoCore VI decodes whatever dimensions the server
-                  // ships (often 2K+), which stalls the raster thread
-                  // for 3+ frames on each PageView swipe. 1280 covers
-                  // the native display with headroom for 4× pinch-zoom
-                  // scale without visible softening.
-                  memCacheWidth: 1280,
-                  maxWidthDiskCache: 1280,
-                  placeholder: (_, __) => const Center(
-                      child: CircularProgressIndicator(
-                          color: Colors.white)),
-                  errorWidget: (_, __, ___) => const Icon(
-                      Icons.broken_image_rounded,
-                      color: Colors.white54,
-                      size: 64),
+            // Swipeable, pinch-zoom pages
+            PageView.builder(
+              controller: _ctl,
+              physics: const BouncingScrollPhysics(),
+              itemCount: widget.urls.length,
+              onPageChanged: (i) => setState(() => _current = i),
+              itemBuilder: (_, i) => InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 4.0,
+                child: Center(
+                  child: CachedNetworkImage(
+                    imageUrl: widget.urls[i],
+                    fit: BoxFit.contain,
+                    // Cap decode at 1280 px wide. Without this the Pi's
+                    // VideoCore VI decodes whatever dimensions the server
+                    // ships (often 2K+), which stalls the raster thread
+                    // for 3+ frames on each PageView swipe. 1280 covers
+                    // the native display with headroom for 4× pinch-zoom
+                    // scale without visible softening.
+                    memCacheWidth: 1280,
+                    maxWidthDiskCache: 1280,
+                    placeholder: (_, __) => const Center(
+                        child: CircularProgressIndicator(
+                            color: Colors.white)),
+                    errorWidget: (_, __, ___) => const Icon(
+                        Icons.broken_image_rounded,
+                        color: Colors.white54,
+                        size: 64),
+                  ),
                 ),
               ),
             ),
-          ),
-          // Page indicator (only when multiple)
-          if (widget.urls.length > 1)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 24,
-              child: SafeArea(
-                top: false,
+            // Prev / Next chevrons. The InteractiveViewer can claim drag
+            // gestures once zoomed and swallow PageView swipes — these
+            // give the user a guaranteed click target on a desktop
+            // without a touchscreen.
+            if (multi && _hasPrev)
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
                 child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.55),
-                      borderRadius:
-                          BorderRadius.circular(AppSpacing.rFull),
+                  child: _NavChevron(
+                    icon: Icons.chevron_left_rounded,
+                    onTap: () {
+                      UserLog.tap('screenshot-viewer.nav',
+                          {'dir': 'prev', 'src': 'btn'});
+                      _go(-1);
+                    },
+                  ),
+                ),
+              ),
+            if (multi && _hasNext)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: _NavChevron(
+                    icon: Icons.chevron_right_rounded,
+                    onTap: () {
+                      UserLog.tap('screenshot-viewer.nav',
+                          {'dir': 'next', 'src': 'btn'});
+                      _go(1);
+                    },
+                  ),
+                ),
+              ),
+            // Page indicator (only when multiple)
+            if (multi)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 24,
+                child: SafeArea(
+                  top: false,
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius:
+                            BorderRadius.circular(AppSpacing.rFull),
+                      ),
+                      child: Text(
+                        '${_current + 1} / ${widget.urls.length}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
-                    child: Text(
-                      '${_current + 1} / ${widget.urls.length}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
+                  ),
+                ),
+              ),
+            // Floating close button (top-right)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  child: Material(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () {
+                        UserLog.tap('screenshot-viewer.dismiss');
+                        Navigator.of(context).maybePop();
+                      },
+                      child: const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(Icons.close_rounded,
+                            color: Colors.white, size: 24),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          // Floating close button (top-right)
-          Positioned(
-            top: 0,
-            right: 0,
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.md),
-                child: Material(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  shape: const CircleBorder(),
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: () {
-                UserLog.tap('screenshot-viewer.dismiss');
-                Navigator.of(context).maybePop();
-              },
-                    child: const Padding(
-                      padding: EdgeInsets.all(10),
-                      child: Icon(Icons.close_rounded,
-                          color: Colors.white, size: 24),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Round chevron button used for prev/next navigation in the screenshot
+/// viewer. Sized for both pointer-click and finger-tap.
+class _NavChevron extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _NavChevron({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.55),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Icon(icon, color: Colors.white, size: 28),
           ),
-        ],
+        ),
       ),
     );
   }

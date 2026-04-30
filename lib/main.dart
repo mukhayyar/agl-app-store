@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:provider/provider.dart';
@@ -13,6 +14,7 @@ import 'pages/installed_apps_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/monitor_page.dart';
 import 'platform/flatpak_platform.dart';
+import 'services/fps_service.dart';
 import 'services/log_service.dart';
 import 'services/system_monitor.dart';
 import 'services/gps_service.dart';
@@ -44,8 +46,16 @@ class AglApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => SystemMonitor()..start()),
-        ChangeNotifierProvider(create: (_) => GpsService()..start()),
+        // Monitor services are NOT auto-started here — they read /proc on a
+        // 1 s timer and tap the rendering pipeline (FPS), so leaving them
+        // running while the user is on Home / Browse / Installed / Settings
+        // wastes CPU and battery for data nobody is looking at. The
+        // MonitorPage state is responsible for calling .start() on mount and
+        // .stop() on dispose. GpsService is currently unconsumed by any UI,
+        // so we leave it dormant entirely until something needs it.
+        ChangeNotifierProvider(create: (_) => SystemMonitor()),
+        ChangeNotifierProvider(create: (_) => GpsService()),
+        ChangeNotifierProvider(create: (_) => FpsService()),
         ChangeNotifierProvider(create: (_) => ThemeService()),
         Provider(create: (_) => ApiBenchmark()),
       ],
@@ -61,6 +71,12 @@ class AglApp extends StatelessWidget {
               title: 'AGL App Store',
               debugShowCheckedModeBanner: false,
               theme: isDark ? AppTheme.dark() : AppTheme.light(),
+              // Allow mouse + trackpad + stylus to drag horizontal scrollers
+              // (screenshot strips, featured row, PageViews). Flutter's
+              // default MaterialScrollBehavior only enables touch — that
+              // makes images on a desktop without a touchscreen feel stuck
+              // because click-and-drag does nothing.
+              scrollBehavior: const _AppScrollBehavior(),
               home: const _Shell(),
               builder: (context, child) {
                 // Boost text size for hard-to-read displays without rescaling
@@ -95,6 +111,24 @@ class AglApp extends StatelessWidget {
   }
 }
 
+/// Lets a mouse (or trackpad / stylus) drag-scroll any Scrollable in the
+/// app. The Material default omits mouse from [dragDevices] — fine for
+/// vertical lists where the user can scroll-wheel, but a hard usability
+/// dead-end for horizontal carousels (screenshots, featured row), where
+/// there's no obvious way to advance without a touchscreen.
+class _AppScrollBehavior extends MaterialScrollBehavior {
+  const _AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => const {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+        PointerDeviceKind.stylus,
+        PointerDeviceKind.invertedStylus,
+      };
+}
+
 // =====================================================================
 // SHELL
 // =====================================================================
@@ -108,6 +142,14 @@ class _ShellState extends State<_Shell> {
   final _scrollCtl = ScrollController();
   final _searchCtl = TextEditingController();
   int _tab = 0;
+
+  // One Navigator per tab so a push from inside Home (or any tab) stays
+  // confined to the tab area — the shell's bottom navigation bar stays
+  // visible behind detail pages, category results, About, etc. Without
+  // these, every Navigator.push uses the root Navigator and covers the
+  // whole shell, which kills the bottom-nav UX the user expects.
+  final List<GlobalKey<NavigatorState>> _navKeys =
+      List.generate(5, (_) => GlobalKey<NavigatorState>());
 
   @override
   void initState() {
@@ -144,21 +186,36 @@ class _ShellState extends State<_Shell> {
   @override
   Widget build(BuildContext context) {
     final bloc = context.read<FlatpakBloc>();
-    return Scaffold(
-      body: Stack(
-        children: [
-          // Page body
-          Positioned.fill(child: _buildBody(bloc)),
-          // Floating operations dynamic island (top-center)
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: OperationsIsland(),
-          ),
-        ],
+    // Intercept system back so it pops within the active tab's nested
+    // Navigator first instead of exiting the app. On embedded targets
+    // there's no system back, but on desktop / with an attached keyboard
+    // the user may still hit Back — keep them inside the shell unless
+    // they explicitly use the Close App button in the header.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        final nav = _navKeys[_tab].currentState;
+        if (nav != null && nav.canPop()) {
+          nav.pop();
+        }
+      },
+      child: Scaffold(
+        body: Stack(
+          children: [
+            // Page body
+            Positioned.fill(child: _buildBody(bloc)),
+            // Floating operations dynamic island (top-center)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: OperationsIsland(),
+            ),
+          ],
+        ),
+        bottomNavigationBar: _bottomNav(bloc),
       ),
-      bottomNavigationBar: _bottomNav(bloc),
     );
   }
 
@@ -192,14 +249,27 @@ class _ShellState extends State<_Shell> {
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
-                    final wasHome = _tab == 0;
+                    final tappingActiveTab = _tab == i;
                     UserLog.tap('nav.tab',
                         {'to': item.label, 'index': i, 'from': _tab});
-                    setState(() => _tab = i);
-                    if (i == 0 && wasHome) {
-                      UserLog.tap('nav.tab.refresh-home');
-                      bloc.add(const RefreshAll());
+                    if (tappingActiveTab) {
+                      // Re-tap on the active tab pops any pushed pages
+                      // (detail, category results, About) back to the
+                      // tab's root — the conventional "tapping the active
+                      // tab takes you home" gesture, and the natural way
+                      // to dismiss a pushed page now that the bottom nav
+                      // is always visible.
+                      final nav = _navKeys[i].currentState;
+                      if (nav != null && nav.canPop()) {
+                        nav.popUntil((r) => r.isFirst);
+                      } else if (i == 0) {
+                        // Already at home root — refresh the catalog.
+                        UserLog.tap('nav.tab.refresh-home');
+                        bloc.add(const RefreshAll());
+                      }
+                      return;
                     }
+                    setState(() => _tab = i);
                   },
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 180),
@@ -250,13 +320,35 @@ class _ShellState extends State<_Shell> {
   }
 
   Widget _buildBody(FlatpakBloc bloc) {
+    Widget root;
     switch (_tab) {
-      case 1: return const CategoriesPage();
-      case 2: return const InstalledAppsPage();
-      case 3: return const SettingsPage();
-      case 4: return const MonitorPage();
-      default: return _homePage(bloc);
+      case 1:
+        root = const CategoriesPage();
+        break;
+      case 2:
+        root = const InstalledAppsPage();
+        break;
+      case 3:
+        root = const SettingsPage();
+        break;
+      case 4:
+        root = const MonitorPage();
+        break;
+      default:
+        root = _homePage(bloc);
     }
+    // Wrap each tab in its own Navigator. Detail pages, category result
+    // pages, About, etc. push onto this nested Navigator, so they cover
+    // only the body area — the shell's bottom navigation bar stays
+    // visible. Hero animations still work because the source tile and
+    // the destination detail page share this same Navigator.
+    return Navigator(
+      key: _navKeys[_tab],
+      onGenerateRoute: (settings) => MaterialPageRoute(
+        settings: settings,
+        builder: (_) => root,
+      ),
+    );
   }
 
   Widget _homePage(FlatpakBloc bloc) {
@@ -520,13 +612,18 @@ class _ShellState extends State<_Shell> {
                 sliver: SliverLayoutBuilder(builder: (context, constraints) {
                   final wide = constraints.crossAxisExtent > 700;
                   if (wide) {
-                    // 2-column grid for landscape / wide displays
+                    // 2-column grid for landscape / wide displays. The tile
+                    // height needs headroom for a 1.25× text scaler on
+                    // fullscreen desktop (1920×1080, DPR<1.5) — at base
+                    // typography the tile is ~92 px, so the previous
+                    // mainAxisExtent: 96 had only ~4 px of slack and
+                    // overflowed by 6 px once font leading kicked in.
                     return SliverGrid(
                       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: 2,
                         crossAxisSpacing: AppSpacing.md,
                         mainAxisSpacing: AppSpacing.md,
-                        mainAxisExtent: 96,
+                        mainAxisExtent: 112,
                       ),
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
@@ -1341,7 +1438,9 @@ class _SkeletonHomeContent extends StatelessWidget {
                       crossAxisCount: 2,
                       crossAxisSpacing: AppSpacing.md,
                       mainAxisSpacing: AppSpacing.md,
-                      mainAxisExtent: 80,
+                      // Match the live grid extent so the skeleton doesn't
+                      // jump to a taller layout when real tiles arrive.
+                      mainAxisExtent: 112,
                     ),
                     delegate: SliverChildBuilderDelegate(
                       (_, __) => const SkeletonAppTile(),

@@ -377,26 +377,80 @@ class FlatpakPlatform {
   /// Add Flathub using its official `.flatpakrepo` file — the embedded
   /// GPG key is authoritative and survives key rotations, so we don't
   /// need a separate key fetch step.
+  ///
+  /// Also self-heals: if the remote exists but was previously added
+  /// with `--no-gpg-verify` (common when an image ships a misconfigured
+  /// flathub or an older version of this app fell back to non-verified
+  /// add), we atomically replace it with a GPG-verified one. Without
+  /// this, flatpak refuses to install anything from flathub with:
+  ///   "Can't pull from untrusted non-gpg verified remote"
+  ///
+  /// Replacement uses `remote-add --force` so that if the new add
+  /// fails (network flake, DNS, flathub.org transient outage), the
+  /// existing remote is preserved. An earlier delete-then-readd version
+  /// could leave the system with no flathub at all when the second step
+  /// failed, surfacing later as "Unknown remote 'flathub'".
   static Future<Map<String, dynamic>> _ensureFlathub() async {
     _log('ensureFlathub: begin');
     final remotes = await _listRemotes();
-    if (remotes != null && remotes.contains(_flathubRemote)) {
-      _log('ensureFlathub: already present');
-      return {'status': 'ok', 'message': 'already present'};
+    final isPresent = remotes != null && remotes.contains(_flathubRemote);
+
+    if (isPresent) {
+      final verified = await _isRemoteGpgVerified(_flathubRemote);
+      if (verified) {
+        _log('ensureFlathub: already present, GPG-verified');
+        return {'status': 'ok', 'message': 'already present'};
+      }
+      _log('ensureFlathub: present but non-GPG-verified — '
+          'replacing in place via remote-add --force');
     }
+
     try {
       await _run('flatpak', [
         'remote-add',
         '--system',
-        '--if-not-exists',
+        if (isPresent) '--force' else '--if-not-exists',
         _flathubRemote,
         _flathubRepoUrl,
       ]);
-      _log('ensureFlathub: added');
-      return {'status': 'added', 'message': 'added from $_flathubRepoUrl'};
+      final status = isPresent ? 'repaired' : 'added';
+      _log('ensureFlathub: $status');
+      return {
+        'status': status,
+        'message': 'configured with GPG from $_flathubRepoUrl',
+      };
     } catch (e) {
-      _log('ensureFlathub: FAILED $e');
+      // With --force the old remote stays if the add fails, so we're
+      // at worst no worse than before this repair attempt.
+      _log('ensureFlathub: FAILED $e (existing remote preserved)');
       return {'status': 'error', 'message': e.toString()};
+    }
+  }
+
+  /// Returns true if the named remote has GPG verification enabled.
+  /// Works by parsing `flatpak remotes --columns=name,options`, which
+  /// lists `no-gpg-verify` as one of the option tokens when disabled.
+  /// Fails open (returns true) if the probe itself fails — we'd rather
+  /// skip an unnecessary re-add than loop.
+  static Future<bool> _isRemoteGpgVerified(String remote) async {
+    try {
+      final out = await _run('flatpak',
+          ['remotes', '--system', '--columns=name,options']);
+      for (final raw in out.split('\n')) {
+        final line = raw.trim();
+        if (line.isEmpty) continue;
+        // Columns come tab-separated when `--columns` is used.
+        final parts = line.split('\t');
+        final name = parts.isNotEmpty ? parts[0].trim() : '';
+        if (name != remote) continue;
+        final opts = parts.length > 1 ? parts[1].trim() : '';
+        return !opts.contains('no-gpg-verify');
+      }
+      return true;
+    } catch (e) {
+      _log('isRemoteGpgVerified($remote): probe failed ($e); '
+          'assuming verified');
+      return true;
     }
   }
 
@@ -534,19 +588,52 @@ class FlatpakPlatform {
     final r = remote ?? _penshubRemote;
     _log('install() dart fallback appId=$appId remote=$r');
     try {
-      // -y auto-confirms; --noninteractive is dropped so flatpak will
-      // emit phase keywords on stdout/stderr that _streamFlatpakOp
-      // uses to flip from 'downloading' to 'installing'.
-      await _streamFlatpakOp(
-        appId: appId,
-        args: ['install', '--system', '-y', r, appId],
-        initialPhase: 'downloading',
-      );
+      await _installAttempt(appId, r, hasRetried: false);
       _emitDone(appId, ok: true);
     } catch (e) {
       _log('install() FAILED appId=$appId error=$e');
       _emitDone(appId, ok: false);
       rethrow;
+    }
+  }
+
+  /// Runs one install attempt. If flatpak rejects the pull with the
+  /// specific "untrusted non-gpg verified remote" error, repairs the
+  /// remote (re-adds with GPG via .flatpakrepo or the PensHub key) and
+  /// retries ONCE. This turns a fatal UX error into a transparent heal.
+  static Future<void> _installAttempt(
+    String appId,
+    String remote, {
+    required bool hasRetried,
+  }) async {
+    try {
+      // -y auto-confirms; --noninteractive is dropped so flatpak will
+      // emit phase keywords on stdout/stderr that _streamFlatpakOp
+      // uses to flip from 'downloading' to 'installing'.
+      await _streamFlatpakOp(
+        appId: appId,
+        args: ['install', '--system', '-y', remote, appId],
+        initialPhase: 'downloading',
+      );
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      final isGpgTrustError =
+          msg.contains('untrusted non-gpg verified remote') ||
+              msg.contains("can't pull from untrusted");
+
+      if (!isGpgTrustError || hasRetried) rethrow;
+
+      _log('installAttempt: GPG-trust error on remote=$remote — '
+          'repairing and retrying once');
+      if (remote == _flathubRemote) {
+        await _ensureFlathub();
+      } else if (remote == _penshubRemote) {
+        await _ensurePenshub();
+      } else {
+        // Unknown remote — nothing to repair. Surface the original error.
+        rethrow;
+      }
+      await _installAttempt(appId, remote, hasRetried: true);
     }
   }
 

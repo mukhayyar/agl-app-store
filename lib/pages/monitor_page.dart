@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/fps_service.dart';
 import '../services/log_service.dart';
 import '../services/system_monitor.dart';
 import '../widgets/gauge_widget.dart';
@@ -8,12 +9,45 @@ import '../widgets/line_chart_widget.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
-class MonitorPage extends StatelessWidget {
+/// Lifecycle: start the resource pollers on mount and stop them on dispose.
+/// The /proc readings + frame-timing callback that drive this page run on a
+/// 1 s timer; leaving them on while the user is on Home / Browse /
+/// Installed / Settings burns CPU for data nobody is looking at, so we tie
+/// them strictly to the page being visible.
+class MonitorPage extends StatefulWidget {
   const MonitorPage({super.key});
+
+  @override
+  State<MonitorPage> createState() => _MonitorPageState();
+}
+
+class _MonitorPageState extends State<MonitorPage> {
+  // Cache provider references so dispose() can stop the services without
+  // touching the BuildContext (which may already be deactivated).
+  SystemMonitor? _mon;
+  FpsService? _fps;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_mon != null) return; // start once per mount
+    _mon = context.read<SystemMonitor>();
+    _fps = context.read<FpsService>();
+    _mon!.start();
+    _fps!.start();
+  }
+
+  @override
+  void dispose() {
+    _mon?.stop();
+    _fps?.stop();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final mon = context.watch<SystemMonitor>();
+    final fps = context.watch<FpsService>();
     final ramPct = mon.ramTotalMb > 0
         ? (mon.ramUsedMb / mon.ramTotalMb * 100)
         : 0.0;
@@ -25,6 +59,8 @@ class MonitorPage extends StatelessWidget {
     final cpuStatus = _statusFor(mon.cpu, warn: 60, crit: 85);
     final ramStatus = _statusFor(ramPct, warn: 70, crit: 90);
     final diskStatus = _statusFor(diskPct, warn: 80, crit: 95);
+    // FPS: higher is better, so the thresholds are inverted from CPU/RAM.
+    final fpsStatus = _fpsStatus(fps.current, target: fps.target);
 
     return Scaffold(
       backgroundColor: context.colors.bg,
@@ -55,6 +91,11 @@ class MonitorPage extends StatelessWidget {
                       status: ramStatus,
                     ),
                     _SummaryTile(
+                      label: 'FPS',
+                      value: fps.current.toStringAsFixed(0),
+                      status: fpsStatus,
+                    ),
+                    _SummaryTile(
                       label: 'STORAGE',
                       value: '${diskPct.toStringAsFixed(0)}%',
                       status: diskStatus,
@@ -68,8 +109,9 @@ class MonitorPage extends StatelessWidget {
                       ),
                     ),
                   ];
-                  // Wrap to 2×2 on narrow, 1×4 on wide
-                  if (box.maxWidth > 600) {
+                  // Wide (≥900 px): one row of 5. Medium (600–900): two
+                  // rows of 3+2. Narrow (<600): three rows of 2+2+1.
+                  if (box.maxWidth >= 900) {
                     return Row(
                       children: [
                         for (int i = 0; i < tiles.length; i++) ...[
@@ -77,6 +119,25 @@ class MonitorPage extends StatelessWidget {
                           if (i != tiles.length - 1)
                             const SizedBox(width: AppSpacing.sm),
                         ],
+                      ],
+                    );
+                  }
+                  if (box.maxWidth >= 600) {
+                    return Column(
+                      children: [
+                        Row(children: [
+                          Expanded(child: tiles[0]),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(child: tiles[1]),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(child: tiles[2]),
+                        ]),
+                        const SizedBox(height: AppSpacing.sm),
+                        Row(children: [
+                          Expanded(child: tiles[3]),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(child: tiles[4]),
+                        ]),
                       ],
                     );
                   }
@@ -93,6 +154,8 @@ class MonitorPage extends StatelessWidget {
                         const SizedBox(width: AppSpacing.sm),
                         Expanded(child: tiles[3]),
                       ]),
+                      const SizedBox(height: AppSpacing.sm),
+                      tiles[4],
                     ],
                   );
                 }),
@@ -139,6 +202,39 @@ class MonitorPage extends StatelessWidget {
                   maxValue: 100,
                   yAxisLabels: const ['100%', '50%', '0%'],
                   unitIsPercent: true,
+                ),
+              ),
+            ),
+            const SliverToBoxAdapter(
+                child: SizedBox(height: AppSpacing.md)),
+
+            // ── Rendering FPS card ───────────────────────────────
+            // The gauge is scaled to the target (60) so a steady 60
+            // fills the arc. Flutter only schedules frames when
+            // something needs redrawing, so idle screens will read
+            // very low — the caption calls that out so users don't
+            // misread it as a performance problem.
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.pageH),
+                child: _MetricCard(
+                  label: 'RENDERING',
+                  gaugeValue:
+                      (fps.current / fps.target * 100).clamp(0.0, 100.0),
+                  headline: '${fps.current.toStringAsFixed(0)} fps',
+                  caption: 'Avg ${fps.average.toStringAsFixed(1)} fps'
+                      ' · target ${fps.target.toStringAsFixed(0)}'
+                      ' · low values are normal when the UI is idle',
+                  status: fpsStatus,
+                  history: fps.history,
+                  maxValue: fps.target,
+                  yAxisLabels: [
+                    fps.target.toStringAsFixed(0),
+                    (fps.target / 2).toStringAsFixed(0),
+                    '0',
+                  ],
+                  unitIsPercent: false,
                 ),
               ),
             ),
@@ -876,6 +972,24 @@ _Status _statusFor(double pct,
     return const _Status(text: 'High', color: AppColors.warning);
   }
   return const _Status(text: 'Normal', color: AppColors.accentGreen);
+}
+
+/// FPS thresholds: "Normal" at ≥90% of target, "Low" at ≥50%,
+/// "Poor" below that. A reading of exactly 0 is treated as "Idle"
+/// (grey) instead of "Poor" so a static screen doesn't alarm the
+/// user — Flutter legitimately renders 0 fps when nothing changes.
+_Status _fpsStatus(double fps, {required double target}) {
+  if (fps == 0) {
+    return const _Status(text: 'Idle', color: AppColors.textTertiary);
+  }
+  final pct = (fps / target) * 100;
+  if (pct >= 90) {
+    return const _Status(text: 'Smooth', color: AppColors.accentGreen);
+  }
+  if (pct >= 50) {
+    return const _Status(text: 'Low', color: AppColors.warning);
+  }
+  return const _Status(text: 'Poor', color: AppColors.danger);
 }
 
 // ═══════════════════════ Data helpers ════════════════════════════════

@@ -70,15 +70,27 @@ class FlatpakPackage {
       return v.toString();
     }
 
+    // Flathub v2 endpoints come in two shapes:
+    //  * /appstream/{id}                 → AppStream object, canonical id at `id`.
+    //  * /collection/category/{name}     → meilisearch hits where `id` is the
+    //                                       underscored search key (e.g.
+    //                                       `org_vinegarhq_Sober`) and the
+    //                                       canonical Flatpak ID lives under
+    //                                       `app_id`.
+    // Prefer `app_id` so category browse hits parse correctly.
     String flatpakId = '';
-    if (json['id'] is String && _looksLikeFlatpakId(json['id'])) {
+    if (json['app_id'] is String && _looksLikeFlatpakId(json['app_id'])) {
+      flatpakId = json['app_id'];
+    } else if (json['id'] is String && _looksLikeFlatpakId(json['id'])) {
       flatpakId = json['id'];
     } else if (json['bundle']?['flatpak']?['id'] is String) {
       flatpakId = json['bundle']['flatpak']['id'];
     }
 
-    final internalId =
-        json['slug']?.toString() ?? json['id']?.toString() ?? flatpakId;
+    final internalId = json['slug']?.toString() ??
+        json['app_id']?.toString() ??
+        json['id']?.toString() ??
+        flatpakId;
 
     // Description: AppStream returns HTML — strip tags to plain text.
     final descRaw = asStringOrFirst(json['description']);
