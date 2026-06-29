@@ -70,6 +70,25 @@ class FlatpakCache {
     });
   }
 
+  /// Atomically replaces the entire catalog with [apps].
+  ///
+  /// Unlike [upsertAll] (which only merges in new/updated records and leaves
+  /// stale ones behind), this wipes the store first so the local cache always
+  /// mirrors the API. This is what makes a reseeded — or emptied — API show up
+  /// correctly in the UI instead of resurfacing old data sembast had kept.
+  /// The wipe + inserts run in a single transaction so readers never observe
+  /// an empty/half-populated catalog.
+  Future<void> replaceAll(List<FlatpakPackage> apps) async {
+    await _db.transaction((txn) async {
+      await _store.delete(txn);
+      for (final a in apps) {
+        if (a.flatpakId.isEmpty) continue;
+        final fixed = normalizeFlatpakId(a.flatpakId);
+        await _store.record(fixed).put(txn, a.toMap());
+      }
+    });
+  }
+
   // -----------------------------
   // Read
   // -----------------------------

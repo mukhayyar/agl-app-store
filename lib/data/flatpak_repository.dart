@@ -158,7 +158,9 @@ class FlatpakRepository {
         });
         if (resp.statusCode == 200) {
           final apps = await compute(_parsePensHubList, resp.body);
-          await _cache.upsertAll(apps);
+          // replaceAll (not upsertAll) so a reseeded/emptied API drops stale
+          // records instead of leaving them cached in the UI.
+          await _cache.replaceAll(apps);
         } else {
           debugPrint('PensHub /apps failed: ${resp.statusCode}');
         }
@@ -172,7 +174,9 @@ class FlatpakRepository {
       });
       if (resp.statusCode == 200) {
         final apps = await compute(_parseFlathubIdList, resp.body);
-        await _cache.upsertAll(apps);
+        // replaceAll (not upsertAll) so a reseeded/emptied API drops stale
+        // records instead of leaving them cached in the UI.
+        await _cache.replaceAll(apps);
       } else {
         debugPrint('Flathub /appstream failed: ${resp.statusCode}');
       }
